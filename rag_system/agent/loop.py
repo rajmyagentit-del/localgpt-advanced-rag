@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional
 import json
+import logging
 import time, asyncio, os
 import numpy as np
 import concurrent.futures
@@ -9,6 +10,8 @@ from rag_system.pipelines.retrieval_pipeline import RetrievalPipeline
 from rag_system.agent.verifier import Verifier
 from rag_system.retrieval.query_transformer import QueryDecomposer, GraphQueryTranslator
 from rag_system.retrieval.retrievers import GraphRetriever
+
+logger = logging.getLogger(__name__)
 
 class Agent:
     """
@@ -42,9 +45,9 @@ class Agent:
         if graph_config.get("enabled"):
             self.graph_query_translator = GraphQueryTranslator(llm_client, gen_model)
             self.graph_retriever = GraphRetriever(graph_config["graph_path"])
-            print("Agent initialized with live GraphRAG capabilities.")
+            logger.info("Agent initialized with live GraphRAG capabilities.")
         else:
-            print("Agent initialized (GraphRAG disabled).")
+            logger.info("Agent initialized (GraphRAG disabled).")
 
         # ---- Load document overviews for fast routing ----
         self._global_overview_path = os.path.join("index_store", "overviews", "overviews.jsonl")
@@ -67,9 +70,9 @@ class Agent:
                             self.doc_overviews.append(rec["overview"].strip())
                     except Exception:
                         continue
-            print(f"📖 Loaded {len(self.doc_overviews)} overviews from {path}")
+            logger.info(f"📖 Loaded {len(self.doc_overviews)} overviews from {path}")
         except Exception as e:
-            print(f"⚠️  Failed to load document overviews from {path}: {e}")
+            logger.warning(f"⚠️  Failed to load document overviews from {path}: {e}")
 
     def load_overviews_for_indexes(self, idx_ids: list[str]):
         """Aggregate overviews for the given indexes or fall back to global file."""
@@ -91,13 +94,13 @@ class Agent:
                             except json.JSONDecodeError:
                                 continue
                 except Exception as e:
-                    print(f"⚠️  Error reading {path}: {e}")
+                    logger.warning(f"⚠️  Error reading {path}: {e}")
         if aggregated:
             self.doc_overviews = aggregated
             self._current_overview_session = "|".join(idx_ids)  # cache composite key so no overwrite
-            print(f"📖 Loaded {len(aggregated)} overviews for indexes {[i[:8] for i in idx_ids]}")
+            logger.info(f"📖 Loaded {len(aggregated)} overviews for indexes {[i[:8] for i in idx_ids]}")
         else:
-            print(f"⚠️  No per-index overviews found for {idx_ids}. Using global overview file.")
+            logger.warning(f"⚠️  No per-index overviews found for {idx_ids}. Using global overview file.")
             self._load_overviews(self._global_overview_path)
             self._current_overview_session = "GLOBAL"
 
@@ -141,7 +144,7 @@ class Agent:
                 similarity = self._cosine_similarity(query_embedding, cached_embedding)
 
                 if similarity >= self.semantic_cache_threshold:
-                    print(f"🚀 Semantic cache hit! Similarity: {similarity:.3f} with cached query '{key}'")
+                    logger.info(f"🚀 Semantic cache hit! Similarity: {similarity:.3f} with cached query '{key}'")
                     return cached_item.get('result')
             except ValueError:
                 # In case of shape mismatch, just skip
@@ -170,25 +173,25 @@ Latest User Query: "{query}"
     # ---------------- Asynchronous triage using Ollama ----------------
     async def _triage_query_async(self, query: str, history: list) -> str:
         
-        print(f"🔍 ROUTING DEBUG: Starting triage for query: '{query[:100]}...'")
+        logger.debug(f"Starting triage for query: '{query[:100]}...'")
         
         # 1️⃣ Fast routing using precomputed overviews (if available)
-        print(f"📖 ROUTING DEBUG: Attempting overview-based routing...")
+        logger.debug(f"Attempting overview-based routing...")
         routed = self._route_via_overviews(query)
         if routed:
-            print(f"✅ ROUTING DEBUG: Overview routing decided: '{routed}'")
+            logger.debug(f"Overview routing decided: '{routed}'")
             return routed
         else:
-            print(f"❌ ROUTING DEBUG: Overview routing returned None, falling back to LLM triage")
+            logger.debug(f"Overview routing returned None, falling back to LLM triage")
 
         if history:
             # If there's history, the query is likely a follow-up, so we default to RAG.
             # A more advanced implementation could use an LLM to see if the new query
             # changes the topic entirely.
-            print(f"📜 ROUTING DEBUG: History exists, defaulting to 'rag_query'")
+            logger.debug(f"History exists, defaulting to 'rag_query'")
             return "rag_query"
 
-        print(f"🤖 ROUTING DEBUG: No history, using LLM fallback triage...")
+        logger.debug(f"No history, using LLM fallback triage...")
         prompt = f"""
 You are a query routing expert. Analyze the user's question and decide which backend should handle it.
 
@@ -212,10 +215,10 @@ Respond with JSON: {{"category": "<your_choice>"}}
         try:
             data = json.loads(resp.get("response", "{}"))
             decision = data.get("category", "rag_query")
-            print(f"🤖 ROUTING DEBUG: LLM fallback triage decided: '{decision}'")
+            logger.debug(f"LLM fallback triage decided: '{decision}'")
             return decision
         except json.JSONDecodeError:
-            print(f"❌ ROUTING DEBUG: LLM fallback triage JSON parsing failed, defaulting to 'rag_query'")
+            logger.warning("LLM fallback triage JSON parsing failed, defaulting to 'rag_query'")
             return "rag_query"
 
     def _run_graph_query(self, query: str, history: list) -> Dict[str, Any]:
@@ -280,8 +283,8 @@ Respond with JSON: {{"category": "<your_choice>"}}
         #             self._current_overview_session = "GLOBAL"
         
         query_type = await self._triage_query_async(query, history)
-        print(f"🎯 ROUTING DEBUG: Final triage decision: '{query_type}'")
-        print(f"Agent Triage Decision: '{query_type}'")
+        logger.debug(f"Final triage decision: '{query_type}'")
+        logger.info(f"Agent Triage Decision: '{query_type}'")
         
         # Create a contextual query that includes history for most operations
         contextual_query = self._format_query_with_history(query, history)
@@ -304,26 +307,26 @@ Respond with JSON: {{"category": "<your_choice>"}}
         # --- Apply runtime retrieval configuration overrides ---
         if retrieval_k is not None:
             self.retrieval_pipeline.config["retrieval_k"] = retrieval_k
-            print(f"🔍 Retrieval K set to: {retrieval_k}")
+            logger.debug(f"🔍 Retrieval K set to: {retrieval_k}")
             
         if context_window_size is not None:
             self.retrieval_pipeline.config["context_window_size"] = context_window_size
-            print(f"🔍 Context window size set to: {context_window_size}")
+            logger.debug(f"🔍 Context window size set to: {context_window_size}")
             
         if reranker_top_k is not None:
             rr_cfg = self.retrieval_pipeline.config.setdefault("reranker", {})
             rr_cfg["top_k"] = reranker_top_k
-            print(f"🔍 Reranker top K set to: {reranker_top_k}")
+            logger.debug(f"🔍 Reranker top K set to: {reranker_top_k}")
             
         if search_type is not None:
             retrieval_cfg = self.retrieval_pipeline.config.setdefault("retrieval", {})
             retrieval_cfg["search_type"] = search_type
-            print(f"🔍 Search type set to: {search_type}")
+            logger.debug(f"🔍 Search type set to: {search_type}")
             
         if dense_weight is not None:
             dense_cfg = self.retrieval_pipeline.config.setdefault("retrieval", {}).setdefault("dense", {})
             dense_cfg["weight"] = dense_weight
-            print(f"🔍 Dense search weight set to: {dense_weight}")
+            logger.debug(f"🔍 Dense search weight set to: {dense_weight}")
 
         query_embedding = None
         # 🚀 OPTIMIZED: Semantic Cache Check
@@ -348,7 +351,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
                     return cached_result
 
         if query_type == "direct_answer":
-            print(f"✅ ROUTING DEBUG: Executing DIRECT_ANSWER path")
+            logger.debug(f"Executing DIRECT_ANSWER path")
             if event_callback:
                 event_callback("direct_answer", {})
 
@@ -378,27 +381,27 @@ Respond with JSON: {{"category": "<your_choice>"}}
             result = {"answer": final_answer, "source_documents": []}
         
         elif query_type == "graph_query" and hasattr(self, 'graph_retriever'):
-            print(f"✅ ROUTING DEBUG: Executing GRAPH_QUERY path")
+            logger.debug(f"Executing GRAPH_QUERY path")
             result = self._run_graph_query(query, history)
 
         # --- RAG Query Processing with Optional Query Decomposition ---
         else: # Default to rag_query
-            print(f"✅ ROUTING DEBUG: Executing RAG_QUERY path (query_type='{query_type}')")
+            logger.debug(f"Executing RAG_QUERY path (query_type='{query_type}')")
             query_decomp_config = self.pipeline_configs.get("query_decomposition", {})
             decomp_enabled = query_decomp_config.get("enabled", False)
             if query_decompose is not None:
                 decomp_enabled = query_decompose
 
             if decomp_enabled:
-                print(f"\n--- Query Decomposition Enabled ---")
+                logger.debug("Query decomposition enabled")
                 # Use the raw user query (without conversation history) for decomposition to avoid leakage of prior context
                 # Pass the last 5 conversation turns for context resolution within the decomposer
                 recent_history = history[-5:] if history else []
                 sub_queries = self.query_decomposer.decompose(raw_query, recent_history)
                 if event_callback:
                     event_callback("decomposition", {"sub_queries": sub_queries})
-                print(f"Original query: '{query}' (Contextual: '{contextual_query}')")
-                print(f"Decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
+                logger.debug(f"Original query: '{query}' (Contextual: '{contextual_query}')")
+                logger.info(f"Decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
                 
                 # Emit retrieval_started event before any retrievals
                 if event_callback:
@@ -407,7 +410,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
                 # If decomposition produced only a single sub-query, skip the
                 # parallel/composition machinery for efficiency.
                 if len(sub_queries) == 1:
-                    print("--- Only one sub-query after decomposition; using direct retrieval path ---")
+                    logger.debug("Only one sub-query after decomposition; using direct retrieval path")
                     result = self.retrieval_pipeline.run(
                         sub_queries[0],
                         table_name,
@@ -426,7 +429,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
                     if compose_sub_answers is not None:
                         compose_from_sub_answers = compose_sub_answers
 
-                    print(f"\n--- Processing {len(sub_queries)} sub-queries in parallel ---")
+                    logger.info(f"Processing {len(sub_queries)} sub-queries in parallel")
                     start_time_inner = time.time()
 
                     # Shared containers
@@ -468,7 +471,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
                             i, sub_query = future_to_query[future]
                             try:
                                 sub_result = future.result()
-                                print(f"✅ Sub-Query {i+1} completed: '{sub_query}'")
+                                logger.debug(f"✅ Sub-Query {i+1} completed: '{sub_query}'")
 
                                 if event_callback:
                                     event_callback("sub_query_result", {
@@ -495,10 +498,10 @@ Respond with JSON: {{"category": "<your_choice>"}}
                                             all_source_docs.append(doc)
                                             citations_seen.add(doc['chunk_id'])
                             except Exception as e:
-                                print(f"❌ Sub-Query {i+1} failed: '{sub_query}' - {e}")
+                                logger.error(f"❌ Sub-Query {i+1} failed: '{sub_query}' - {e}")
 
                     parallel_time = time.time() - start_time_inner
-                    print(f"🚀 Parallel processing completed in {parallel_time:.2f}s")
+                    logger.info(f"🚀 Parallel processing completed in {parallel_time:.2f}s")
 
                     # Emit retrieval_done and rerank_done after all sub-queries are processed
                     if event_callback:
@@ -506,7 +509,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
                         event_callback("rerank_done", {"count": len(sub_queries)})
 
                     if compose_from_sub_answers:
-                        print("\n--- Composing final answer from sub-answers ---")
+                        logger.debug("Composing final answer from sub-answers")
                         compose_prompt = f"""
 You are an expert answer composer for a Retrieval-Augmented Generation (RAG) system.
 
@@ -553,7 +556,7 @@ FINAL ANSWER:
                         if event_callback:
                             event_callback("final_answer", result)
                     else:
-                        print(f"\n--- Aggregated {len(all_source_docs)} unique documents from all sub-queries ---")
+                        logger.debug(f"Aggregated {len(all_source_docs)} unique documents from all sub-queries")
 
                         if all_source_docs:
                             aggregated_context = "\n\n".join([doc['text'] for doc in all_source_docs])
@@ -579,19 +582,19 @@ FINAL ANSWER:
                     k=self.retrieval_pipeline.config.get("retrieval_k", 10),
                 ) if hasattr(self.retrieval_pipeline, "retriever") and self.retrieval_pipeline.retriever else [])
 
-                print("\n=== DEBUG: Original retrieval order ===")
+                logger.debug("\nOriginal retrieval order ===")
                 for i, d in enumerate(retrieved_docs[:10]):
                     snippet = (d.get('text','') or '')[:200].replace('\n',' ')
-                    print(f"Orig[{i}] id={d.get('chunk_id')} dist={d.get('_distance','') or d.get('score','')}  {snippet}")
+                    logger.debug(f"Orig[{i}] id={d.get('chunk_id')} dist={d.get('_distance','') or d.get('score','')}  {snippet}")
 
                 result = self.retrieval_pipeline.run(contextual_query, table_name, 0 if context_expand is False else None, event_callback=event_callback)
 
                 # After run, result['source_documents'] is reranked list
                 reranked_docs = result.get('source_documents', [])
-                print("\n=== DEBUG: Reranked docs order ===")
+                logger.debug("\nReranked docs order ===")
                 for i, d in enumerate(reranked_docs[:10]):
                     snippet = (d.get('text','') or '')[:200].replace('\n',' ')
-                    print(f"ReRank[{i}] id={d.get('chunk_id')} score={d.get('rerank_score','')} {snippet}")
+                    logger.debug(f"ReRank[{i}] id={d.get('chunk_id')} score={d.get('rerank_score','')} {snippet}")
         
         # Verification step (simplified for now) - Skip in fast mode
         verification_enabled = self.pipeline_configs.get("verification", {}).get("enabled", True)
@@ -612,9 +615,9 @@ FINAL ANSWER:
                     result['answer'] += f" [Warning: Low confidence. Groundedness: {verification.is_grounded}]"
             else:
                 # Skip appending any verifier note – 0 likely indicates a parser error
-                print("⚠️  Verifier returned 0 confidence – likely JSON parse error; omitting tags.")
+                logger.warning("⚠️  Verifier returned 0 confidence – likely JSON parse error; omitting tags.")
         else:
-            print("🚀 Skipping verification for speed or lack of sources")
+            logger.debug("🚀 Skipping verification for speed or lack of sources")
         
         # 🚀 NEW: Update history
         if session_id:
@@ -631,7 +634,7 @@ FINAL ANSWER:
             }
         
         total_time = time.time() - start_time
-        print(f"🚀 Total query processing time: {total_time:.2f}s")
+        logger.info(f"🚀 Total query processing time: {total_time:.2f}s")
         
         return result
 
@@ -640,10 +643,10 @@ FINAL ANSWER:
         """Use document overviews and a small model to decide routing.
         Returns 'rag_query', 'direct_answer', or None if unsure/disabled."""
         if not self.doc_overviews:
-            print(f"📖 ROUTING DEBUG: No document overviews available, returning None")
+            logger.debug(f"No document overviews available, returning None")
             return None
         
-        print(f"📖 ROUTING DEBUG: Found {len(self.doc_overviews)} document overviews, using LLM routing...")
+        logger.debug(f"Found {len(self.doc_overviews)} document overviews, using LLM routing...")
 
         # Keep prompt concise: if more than 40 overviews, take first 40
         overviews_snip = self.doc_overviews[:40]
@@ -670,11 +673,11 @@ Response:"""
         )
         try:
             raw_response = resp.get("response", "{}")
-            print(f"📖 ROUTING DEBUG: Overview LLM raw response: '{raw_response[:200]}...'")
+            logger.debug(f"Overview LLM raw response: '{raw_response[:200]}...'")
             data = json.loads(raw_response)
             decision = data.get("category", "rag_query")
-            print(f"📖 ROUTING DEBUG: Overview routing final decision: '{decision}'")
+            logger.debug(f"Overview routing final decision: '{decision}'")
             return decision
         except json.JSONDecodeError as e:
-            print(f"❌ ROUTING DEBUG: Overview routing JSON parsing failed: {e}, defaulting to 'rag_query'")
+            logger.warning(f"Overview routing JSON parsing failed: {e}, defaulting to 'rag_query'")
             return "rag_query"

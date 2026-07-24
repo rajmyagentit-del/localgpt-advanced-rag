@@ -4,25 +4,24 @@ import os
 # ---------------------------------------------------------
 # Global logging setup for the entire `rag_system` package.
 # ---------------------------------------------------------
-# You can control verbosity with an env variable, e.g.:
-#   export RAG_LOG_LEVEL=DEBUG  (or INFO / WARNING / ERROR)
-# If not set, we default to INFO to avoid excessive noise.
+# This is the ONE place logging gets configured. Every other module in
+# this codebase should just call logging.getLogger(__name__) and log
+# through it - see rag_system/utils/logging_utils.py for the full
+# explanation and the setup_logging() implementation.
+#
+# RAG_LOG_LEVEL is kept as a legacy alias for LOG_LEVEL so existing
+# deployments that set it don't break; LOG_LEVEL takes precedence if
+# both are set.
 # ---------------------------------------------------------
-_level_str = os.getenv("RAG_LOG_LEVEL", "INFO").upper()
-_level = getattr(logging, _level_str, logging.INFO)
+from rag_system.utils.logging_utils import setup_logging
 
-# Only configure root logger if it hasn't been configured yet
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=_level,
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    )
-else:
-    logging.getLogger().setLevel(_level)
+_legacy_level = os.getenv("RAG_LOG_LEVEL")
+if _legacy_level and not os.getenv("LOG_LEVEL"):
+    os.environ["LOG_LEVEL"] = _legacy_level
 
-logging.getLogger(__name__).debug(
-    "Initialized rag_system logging (level=%s)", _level_str
-)
+setup_logging()
+
+logging.getLogger(__name__).debug("Initialized rag_system logging")
 
 # ---------------------------------------------------------
 # Authenticate to Hugging Face Hub if a token is provided

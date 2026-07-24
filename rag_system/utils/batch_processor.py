@@ -5,7 +5,6 @@ from contextlib import contextmanager
 import gc
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @contextmanager
