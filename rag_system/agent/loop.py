@@ -1,15 +1,19 @@
-from typing import Dict, Any, Optional
+import asyncio
+import concurrent.futures
 import json
 import logging
-import time, asyncio, os
+import os
+import time
+from typing import Any, Callable
+
 import numpy as np
-import concurrent.futures
-from cachetools import TTLCache, LRUCache
-from rag_system.utils.ollama_client import OllamaClient
-from rag_system.pipelines.retrieval_pipeline import RetrievalPipeline
+from cachetools import LRUCache, TTLCache
+
 from rag_system.agent.verifier import Verifier
-from rag_system.retrieval.query_transformer import QueryDecomposer, GraphQueryTranslator
+from rag_system.pipelines.retrieval_pipeline import RetrievalPipeline
+from rag_system.retrieval.query_transformer import GraphQueryTranslator, QueryDecomposer
 from rag_system.retrieval.retrievers import GraphRetriever
+from rag_system.utils.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,7 @@ class Agent:
     """
     The main agent, now fully wired to use a live Ollama client.
     """
-    def __init__(self, pipeline_configs: Dict[str, Dict], llm_client: OllamaClient, ollama_config: Dict[str, str]):
+    def __init__(self, pipeline_configs: dict[str, dict], llm_client: OllamaClient, ollama_config: dict[str, str]):
         self.pipeline_configs = pipeline_configs
         self.llm_client = llm_client
         self.ollama_config = ollama_config
@@ -57,7 +61,8 @@ class Agent:
 
     def _load_overviews(self, path: str):
         """Helper to load overviews from a .jsonl file into self.doc_overviews."""
-        import json, os
+        import json
+        import os
         self.doc_overviews.clear()
         if not os.path.exists(path):
             return
@@ -76,7 +81,8 @@ class Agent:
 
     def load_overviews_for_indexes(self, idx_ids: list[str]):
         """Aggregate overviews for the given indexes or fall back to global file."""
-        import os, json
+        import json
+        import os
         aggregated: list[str] = []
         for idx in idx_ids:
             path = os.path.join("index_store", "overviews", f"{idx}.jsonl")
@@ -125,7 +131,7 @@ class Agent:
         
         return dot_product / (norm_v1 * norm_v2)
 
-    def _find_in_semantic_cache(self, query_embedding: np.ndarray, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def _find_in_semantic_cache(self, query_embedding: np.ndarray, session_id: str | None = None) -> dict[str, Any] | None:
         """Finds a semantically similar query in the cache."""
         if not self._query_cache or query_embedding is None:
             return None
@@ -176,22 +182,22 @@ Latest User Query: "{query}"
         logger.debug(f"Starting triage for query: '{query[:100]}...'")
         
         # 1️⃣ Fast routing using precomputed overviews (if available)
-        logger.debug(f"Attempting overview-based routing...")
+        logger.debug("Attempting overview-based routing...")
         routed = self._route_via_overviews(query)
         if routed:
             logger.debug(f"Overview routing decided: '{routed}'")
             return routed
         else:
-            logger.debug(f"Overview routing returned None, falling back to LLM triage")
+            logger.debug("Overview routing returned None, falling back to LLM triage")
 
         if history:
             # If there's history, the query is likely a follow-up, so we default to RAG.
             # A more advanced implementation could use an LLM to see if the new query
             # changes the topic entirely.
-            logger.debug(f"History exists, defaulting to 'rag_query'")
+            logger.debug("History exists, defaulting to 'rag_query'")
             return "rag_query"
 
-        logger.debug(f"No history, using LLM fallback triage...")
+        logger.debug("No history, using LLM fallback triage...")
         prompt = f"""
 You are a query routing expert. Analyze the user's question and decide which backend should handle it.
 
@@ -221,7 +227,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
             logger.warning("LLM fallback triage JSON parsing failed, defaulting to 'rag_query'")
             return "rag_query"
 
-    def _run_graph_query(self, query: str, history: list) -> Dict[str, Any]:
+    def _run_graph_query(self, query: str, history: list) -> dict[str, Any]:
         contextual_query = self._format_query_with_history(query, history)
         structured_query = self.graph_query_translator.translate(contextual_query)
         if not structured_query.get("start_node"):
@@ -237,7 +243,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
         # Simple cache key based on query and type
         return f"{query_type}:{query.strip().lower()}"
     
-    def _cache_result(self, cache_key: str, result: Dict[str, Any], session_id: Optional[str] = None):
+    def _cache_result(self, cache_key: str, result: dict[str, Any], session_id: str | None = None):
         """Cache a result with size limit"""
         if len(self._query_cache) >= self._cache_max_size:
             # Remove oldest entry (simple FIFO eviction)
@@ -251,7 +257,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
         }
 
     # ---------------- Public sync API (kept for backwards compatibility) --------------
-    def run(self, query: str, table_name: str = None, session_id: str = None, compose_sub_answers: Optional[bool] = None, query_decompose: Optional[bool] = None, ai_rerank: Optional[bool] = None, context_expand: Optional[bool] = None, verify: Optional[bool] = None, retrieval_k: Optional[int] = None, context_window_size: Optional[int] = None, reranker_top_k: Optional[int] = None, search_type: Optional[str] = None, dense_weight: Optional[float] = None, max_retries: int = 1, event_callback: Optional[callable] = None) -> Dict[str, Any]:
+    def run(self, query: str, table_name: str = None, session_id: str = None, compose_sub_answers: bool | None = None, query_decompose: bool | None = None, ai_rerank: bool | None = None, context_expand: bool | None = None, verify: bool | None = None, retrieval_k: int | None = None, context_window_size: int | None = None, reranker_top_k: int | None = None, search_type: str | None = None, dense_weight: float | None = None, max_retries: int = 1, event_callback: Callable | None = None) -> dict[str, Any]:
         """Synchronous helper. If *event_callback* is supplied, important
         milestones will be forwarded to that callable as
 
@@ -260,7 +266,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
         return asyncio.run(self._run_async(query, table_name, session_id, compose_sub_answers, query_decompose, ai_rerank, context_expand, verify, retrieval_k, context_window_size, reranker_top_k, search_type, dense_weight, max_retries, event_callback))
 
     # ---------------- Main async implementation --------------------------------------
-    async def _run_async(self, query: str, table_name: str = None, session_id: str = None, compose_sub_answers: Optional[bool] = None, query_decompose: Optional[bool] = None, ai_rerank: Optional[bool] = None, context_expand: Optional[bool] = None, verify: Optional[bool] = None, retrieval_k: Optional[int] = None, context_window_size: Optional[int] = None, reranker_top_k: Optional[int] = None, search_type: Optional[str] = None, dense_weight: Optional[float] = None, max_retries: int = 1, event_callback: Optional[callable] = None) -> Dict[str, Any]:
+    async def _run_async(self, query: str, table_name: str = None, session_id: str = None, compose_sub_answers: bool | None = None, query_decompose: bool | None = None, ai_rerank: bool | None = None, context_expand: bool | None = None, verify: bool | None = None, retrieval_k: int | None = None, context_window_size: int | None = None, reranker_top_k: int | None = None, search_type: str | None = None, dense_weight: float | None = None, max_retries: int = 1, event_callback: Callable | None = None) -> dict[str, Any]:
         start_time = time.time()
         
         # Emit analyze event at the start
@@ -351,7 +357,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
                     return cached_result
 
         if query_type == "direct_answer":
-            logger.debug(f"Executing DIRECT_ANSWER path")
+            logger.debug("Executing DIRECT_ANSWER path")
             if event_callback:
                 event_callback("direct_answer", {})
 
@@ -381,7 +387,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
             result = {"answer": final_answer, "source_documents": []}
         
         elif query_type == "graph_query" and hasattr(self, 'graph_retriever'):
-            logger.debug(f"Executing GRAPH_QUERY path")
+            logger.debug("Executing GRAPH_QUERY path")
             result = self._run_graph_query(query, history)
 
         # --- RAG Query Processing with Optional Query Decomposition ---
@@ -643,7 +649,7 @@ FINAL ANSWER:
         """Use document overviews and a small model to decide routing.
         Returns 'rag_query', 'direct_answer', or None if unsure/disabled."""
         if not self.doc_overviews:
-            logger.debug(f"No document overviews available, returning None")
+            logger.debug("No document overviews available, returning None")
             return None
         
         logger.debug(f"Found {len(self.doc_overviews)} document overviews, using LLM routing...")
