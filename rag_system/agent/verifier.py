@@ -1,5 +1,8 @@
 import json
 from rag_system.utils.ollama_client import OllamaClient
+import logging
+
+logger = logging.getLogger(__name__)
 
 class VerificationResult:
     def __init__(self, is_grounded: bool, reasoning: str, verdict: str, confidence_score: int):
@@ -15,7 +18,7 @@ class Verifier:
     def __init__(self, llm_client: OllamaClient, llm_model: str):
         self.llm_client = llm_client
         self.llm_model = llm_model
-        print(f"Initialized Verifier with Ollama model '{self.llm_model}'.")
+        logger.info(f"Initialized Verifier with Ollama model '{self.llm_model}'.")
 
     # Synchronous verify() method removed – async version is used everywhere.
 

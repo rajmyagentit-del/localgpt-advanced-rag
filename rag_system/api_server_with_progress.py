@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 ACTIVE_PROGRESS_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 # --- Global Singleton for the RAG Agent ---
-print("🧠 Initializing RAG Agent... (This may take a moment)")
+logger.info("🧠 Initializing RAG Agent... (This may take a moment)")
 RAG_AGENT = get_agent()
 if RAG_AGENT is None:
-    print("❌ Critical error: RAG Agent could not be initialized. Exiting.")
+    logger.error("❌ Critical error: RAG Agent could not be initialized. Exiting.")
     exit(1)
-print("✅ RAG Agent initialized successfully.")
+logger.info("✅ RAG Agent initialized successfully.")
 
 class ServerSentEventsHandler:
     """Handler for Server-Sent Events (SSE) for real-time progress updates"""
@@ -417,12 +417,12 @@ def start_enhanced_server(port=8000):
         allow_reuse_address = True
 
     with ReusableTCPServer(("", port), EnhancedRagApiHandler) as httpd:
-        print(f"🚀 Starting Enhanced RAG API server on port {port}")
-        print(f"💬 Chat endpoint: http://localhost:{port}/chat")
-        print(f"✨ Indexing endpoint: http://localhost:{port}/index")
-        print(f"📊 Progress endpoint: http://localhost:{port}/progress")
-        print(f"🌊 Progress stream: http://localhost:{port}/stream")
-        print(f"📈 Real-time progress tracking enabled via Server-Sent Events!")
+        logger.info(f"🚀 Starting Enhanced RAG API server on port {port}")
+        logger.info(f"💬 Chat endpoint: http://localhost:{port}/chat")
+        logger.info(f"✨ Indexing endpoint: http://localhost:{port}/index")
+        logger.info(f"📊 Progress endpoint: http://localhost:{port}/progress")
+        logger.info(f"🌊 Progress stream: http://localhost:{port}/stream")
+        logger.info(f"📈 Real-time progress tracking enabled via Server-Sent Events!")
         httpd.serve_forever()
 
 if __name__ == '__main__':
@@ -431,12 +431,12 @@ if __name__ == '__main__':
     server_thread.daemon = True
     server_thread.start()
     
-    print("🚀 Enhanced RAG API server with progress tracking is running.")
-    print("Press Ctrl+C to stop.")
+    logger.info("🚀 Enhanced RAG API server with progress tracking is running.")
+    logger.info("Press Ctrl+C to stop.")
     
     # Keep the main thread alive
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nStopping server...") 
+        logger.info("\nStopping server...") 

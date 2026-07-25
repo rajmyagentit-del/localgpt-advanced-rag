@@ -14,8 +14,11 @@ Run this after making configuration changes to catch issues early.
 
 import sys
 import os
+import logging
 # Add parent directories to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+logger = logging.getLogger(__name__)
 
 from rag_system.main import (
     PIPELINE_CONFIGS, 
@@ -26,15 +29,15 @@ from rag_system.main import (
 
 def print_header(title: str):
     """Print a formatted header."""
-    print(f"\n{'='*60}")
-    print(f"🔍 {title}")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.debug(f"🔍 {title}")
+    logger.info(f"{'='*60}")
 
 def print_section(title: str):
     """Print a formatted section header.""" 
-    print(f"\n{'─'*40}")
-    print(f"📋 {title}")
-    print(f"{'─'*40}")
+    logger.info(f"\n{'─'*40}")
+    logger.info(f"📋 {title}")
+    logger.info(f"{'─'*40}")
 
 def validate_configuration_consistency():
     """Validate that all configurations are consistent."""
@@ -48,42 +51,42 @@ def validate_configuration_consistency():
     external_embedding = EXTERNAL_MODELS["embedding_model"]
     fast_embedding = PIPELINE_CONFIGS["fast"]["embedding_model_name"]
     
-    print(f"Default Config: {default_embedding}")
-    print(f"External Models: {external_embedding}")  
-    print(f"Fast Config: {fast_embedding}")
+    logger.info(f"Default Config: {default_embedding}")
+    logger.info(f"External Models: {external_embedding}")  
+    logger.info(f"Fast Config: {fast_embedding}")
     
     if default_embedding != external_embedding:
         errors.append(f"❌ Embedding model mismatch: default={default_embedding}, external={external_embedding}")
     elif default_embedding != fast_embedding:
         errors.append(f"❌ Embedding model mismatch: default={default_embedding}, fast={fast_embedding}")
     else:
-        print("✅ Embedding models are consistent")
+        logger.info("✅ Embedding models are consistent")
     
     # 2. Check reranker model consistency
     print_section("Reranker Model Consistency")
     default_reranker = PIPELINE_CONFIGS["default"]["reranker"]["model_name"]
     external_reranker = EXTERNAL_MODELS["reranker_model"]
     
-    print(f"Default Config: {default_reranker}")
-    print(f"External Models: {external_reranker}")
+    logger.info(f"Default Config: {default_reranker}")
+    logger.info(f"External Models: {external_reranker}")
     
     if default_reranker != external_reranker:
         errors.append(f"❌ Reranker model mismatch: default={default_reranker}, external={external_reranker}")
     else:
-        print("✅ Reranker models are consistent")
+        logger.info("✅ Reranker models are consistent")
     
     # 3. Check vision model consistency
     print_section("Vision Model Consistency")
     default_vision = PIPELINE_CONFIGS["default"]["vision_model_name"]
     external_vision = EXTERNAL_MODELS["vision_model"]
     
-    print(f"Default Config: {default_vision}")
-    print(f"External Models: {external_vision}")
+    logger.info(f"Default Config: {default_vision}")
+    logger.info(f"External Models: {external_vision}")
     
     if default_vision != external_vision:
         errors.append(f"❌ Vision model mismatch: default={default_vision}, external={external_vision}")
     else:
-        print("✅ Vision models are consistent")
+        logger.info("✅ Vision models are consistent")
     
     return errors
 
@@ -94,11 +97,11 @@ def print_model_usage_map():
     print_section("🤖 Ollama Models (Local Inference)")
     for model_type, model_name in OLLAMA_CONFIG.items():
         if model_type != "host":
-            print(f"  {model_type.replace('_', ' ').title()}: {model_name}")
+            logger.info(f"  {model_type.replace('_', ' ').title()}: {model_name}")
     
     print_section("🔗 External Models (HuggingFace/Direct)")
     for model_type, model_name in EXTERNAL_MODELS.items():
-        print(f"  {model_type.replace('_', ' ').title()}: {model_name}")
+        logger.info(f"  {model_type.replace('_', ' ').title()}: {model_name}")
     
     print_section("📍 Model Usage by Component")
     usage_map = {
@@ -130,10 +133,10 @@ def print_model_usage_map():
     }
     
     for model_name, details in usage_map.items():
-        print(f"\n{model_name}")
-        print(f"  Model: {details['Model']}")
-        print(f"  Component: {details['Component']}")
-        print(f"  Used In: {', '.join(details['Used In'])}")
+        logger.info(f"\n{model_name}")
+        logger.info(f"  Model: {details['Model']}")
+        logger.info(f"  Component: {details['Component']}")
+        logger.info(f"  Used In: {', '.join(details['Used In'])}")
 
 def test_validation_function():
     """Test the built-in validation function."""
@@ -142,11 +145,11 @@ def test_validation_function():
     try:
         result = validate_model_config()
         if result:
-            print("✅ validate_model_config() passed successfully!")
+            logger.info("✅ validate_model_config() passed successfully!")
         else:
-            print("❌ validate_model_config() returned False")
+            logger.error("❌ validate_model_config() returned False")
     except Exception as e:
-        print(f"❌ validate_model_config() failed with error: {e}")
+        logger.error(f"❌ validate_model_config() failed with error: {e}")
         return False
     
     return True
@@ -168,18 +171,18 @@ def check_pipeline_configurations():
         
         for key in required:
             if key in config:
-                print(f"  ✅ {key}: {type(config[key]).__name__}")
+                logger.info(f"  ✅ {key}: {type(config[key]).__name__}")
             else:
                 error_msg = f"❌ Missing required key '{key}' in {config_name} config"
                 errors.append(error_msg)  
-                print(f"  {error_msg}")
+                logger.error(f"  {error_msg}")
     
     return errors
 
 def main():
     """Run all validation checks."""
-    print("🚀 Starting Model Configuration Validation")
-    print(f"Python Path: {sys.path[0]}")
+    logger.info("🚀 Starting Model Configuration Validation")
+    logger.info(f"Python Path: {sys.path[0]}")
     
     all_errors = []
     
@@ -197,22 +200,22 @@ def main():
     print_header("VALIDATION SUMMARY")
     
     if all_errors:
-        print("❌ VALIDATION FAILED - Issues Found:")
+        logger.error("❌ VALIDATION FAILED - Issues Found:")
         for error in all_errors:
-            print(f"  {error}")
+            logger.error(f"  {error}")
         return 1
     elif not validation_passed:
-        print("❌ VALIDATION FAILED - validate_model_config() function failed")
+        logger.error("❌ VALIDATION FAILED - validate_model_config() function failed")
         return 1
     else:
-        print("✅ ALL VALIDATIONS PASSED!")
-        print("\n🎉 Your model configuration is consistent and properly structured!")
-        print("\n📋 Summary:")
-        print(f"   • Embedding Model: {EXTERNAL_MODELS['embedding_model']}")
-        print(f"   • Generation Model: {OLLAMA_CONFIG['generation_model']}")
-        print(f"   • Enrichment Model: {OLLAMA_CONFIG['enrichment_model']}")
-        print(f"   • Reranker Model: {EXTERNAL_MODELS['reranker_model']}")
-        print(f"   • Vision Model: {EXTERNAL_MODELS['vision_model']}")
+        logger.info("✅ ALL VALIDATIONS PASSED!")
+        logger.info("\n🎉 Your model configuration is consistent and properly structured!")
+        logger.info("\n📋 Summary:")
+        logger.info(f"   • Embedding Model: {EXTERNAL_MODELS['embedding_model']}")
+        logger.info(f"   • Generation Model: {OLLAMA_CONFIG['generation_model']}")
+        logger.info(f"   • Enrichment Model: {OLLAMA_CONFIG['enrichment_model']}")
+        logger.info(f"   • Reranker Model: {EXTERNAL_MODELS['reranker_model']}")
+        logger.info(f"   • Vision Model: {EXTERNAL_MODELS['vision_model']}")
         return 0
 
 if __name__ == "__main__":

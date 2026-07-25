@@ -5,6 +5,9 @@ import base64
 from io import BytesIO
 from PIL import Image
 import httpx, asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 class OllamaClient:
     """
@@ -30,7 +33,7 @@ class OllamaClient:
             response.raise_for_status()
             return response.json().get("embedding", [])
         except requests.exceptions.RequestException as e:
-            print(f"Error generating embedding: {e}")
+            logger.error(f"Error generating embedding: {e}")
             return []
 
     def generate_completion(
@@ -78,7 +81,7 @@ class OllamaClient:
             return final_response
 
         except requests.exceptions.RequestException as e:
-            print(f"Error generating completion: {e}")
+            logger.error(f"Error generating completion: {e}")
             return {}
 
     # -------------------------------------------------------------
@@ -112,7 +115,7 @@ class OllamaClient:
                 resp.raise_for_status()
                 return json.loads(resp.text.strip().split("\n")[-1])
         except (httpx.HTTPError, asyncio.CancelledError) as e:
-            print(f"Async Ollama completion error: {e}")
+            logger.error(f"Async Ollama completion error: {e}")
             return {}
 
     # -------------------------------------------------------------
@@ -131,7 +134,7 @@ class OllamaClient:
         Example:
 
             for tok in client.stream_completion("qwen2", "Hello"):
-                print(tok, end="", flush=True)
+                logger.info(tok, end="", flush=True)
         """
         payload: Dict[str, Any] = {"model": model, "prompt": prompt, "stream": True}
         if images:
@@ -158,7 +161,7 @@ class OllamaClient:
 
 if __name__ == '__main__':
     # This test now requires a VLM model like 'llava' or 'qwen-vl' to be pulled.
-    print("Ollama client updated for multimodal (VLM) support.")
+    logger.info("Ollama client updated for multimodal (VLM) support.")
     try:
         client = OllamaClient()
         # Create a dummy black image for testing
@@ -172,10 +175,10 @@ if __name__ == '__main__':
         )
         
         if vlm_response and 'response' in vlm_response:
-            print("\n--- VLM Test Response ---")
-            print(vlm_response['response'])
+            logger.info("\n--- VLM Test Response ---")
+            logger.info(vlm_response['response'])
         else:
-            print("\nFailed to get VLM response. Is 'llava' model pulled and running?")
+            logger.error("\nFailed to get VLM response. Is 'llava' model pulled and running?")
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")

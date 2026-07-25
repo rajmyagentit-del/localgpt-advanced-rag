@@ -3,6 +3,9 @@ from typing import List, Dict, Any, Optional
 import base64
 from io import BytesIO
 from PIL import Image
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class WatsonXClient:
@@ -76,7 +79,7 @@ class WatsonXClient:
             return result if isinstance(result, list) else []
             
         except Exception as e:
-            print(f"Error generating embedding: {e}")
+            logger.error(f"Error generating embedding: {e}")
             return []
 
     def generate_completion(
@@ -125,7 +128,7 @@ class WatsonXClient:
             )
             
             if images:
-                print("Warning: Image support in Watson X may vary by model")
+                logger.warning("Warning: Image support in Watson X may vary by model")
                 result = model_inference.generate(prompt=prompt)
             else:
                 result = model_inference.generate(prompt=prompt)
@@ -143,7 +146,7 @@ class WatsonXClient:
             }
             
         except Exception as e:
-            print(f"Error generating completion: {e}")
+            logger.error(f"Error generating completion: {e}")
             return {'response': '', 'error': str(e)}
 
     async def generate_completion_async(
@@ -218,19 +221,19 @@ class WatsonXClient:
                 yield generated_text
                 
         except Exception as e:
-            print(f"Error in stream_completion: {e}")
+            logger.error(f"Error in stream_completion: {e}")
             yield ""
 
 
 if __name__ == '__main__':
-    print("Watson X Client for IBM watsonx.ai integration")
-    print("This client provides Ollama-compatible interface for Watson X granite models")
-    print("\nTo use this client, you need:")
-    print("1. IBM Cloud API key")
-    print("2. Watson X project ID")
-    print("3. ibm-watsonx-ai package installed")
-    print("\nExample usage:")
-    print("""
+    logger.info("Watson X Client for IBM watsonx.ai integration")
+    logger.info("This client provides Ollama-compatible interface for Watson X granite models")
+    logger.info("\nTo use this client, you need:")
+    logger.info("1. IBM Cloud API key")
+    logger.info("2. Watson X project ID")
+    logger.info("3. ibm-watsonx-ai package installed")
+    logger.info("\nExample usage:")
+    logger.info("""
     from rag_system.utils.watsonx_client import WatsonXClient
     
     client = WatsonXClient(
@@ -242,5 +245,5 @@ if __name__ == '__main__':
         model="ibm/granite-13b-chat-v2",
         prompt="What is AI?"
     )
-    print(response['response'])
+    logger.info(response['response'])
     """)

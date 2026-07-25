@@ -13,6 +13,9 @@ load_dotenv()
 
 from rag_system.agent.loop import Agent
 from rag_system.utils.ollama_client import OllamaClient
+import logging
+
+logger = logging.getLogger(__name__)
 # Configuration is now defined in this file - no import needed
 
 # Advanced RAG System Configuration
@@ -192,11 +195,11 @@ def get_agent(mode: str = "default") -> Agent:
             url=WATSONX_CONFIG["url"]
         )
         llm_config = WATSONX_CONFIG
-        print(f"🔧 Using Watson X backend with granite models")
+        logger.info(f"🔧 Using Watson X backend with granite models")
     else:
         llm_client = OllamaClient(host=OLLAMA_CONFIG["host"])
         llm_config = OLLAMA_CONFIG
-        print(f"🔧 Using Ollama backend")
+        logger.info(f"🔧 Using Ollama backend")
     
     # Get the configuration for the specified mode
     config = PIPELINE_CONFIGS.get(mode, PIPELINE_CONFIGS['default'])
@@ -215,7 +218,7 @@ def validate_model_config():
     Raises:
         ValueError: If configuration conflicts are detected
     """
-    print("🔍 Validating model configuration...")
+    logger.debug("🔍 Validating model configuration...")
     
     # Check for embedding model consistency
     default_embedding = PIPELINE_CONFIGS["default"]["embedding_model_name"]
@@ -231,7 +234,7 @@ def validate_model_config():
     if default_reranker != external_reranker:
         raise ValueError(f"Reranker model mismatch: {default_reranker} != {external_reranker}")
     
-    print("✅ Model configuration validation passed!")
+    logger.info("✅ Model configuration validation passed!")
     
     return True
 
@@ -241,7 +244,7 @@ def validate_model_config():
 
 def run_indexing(docs_path: str, config_mode: str = "default"):
     """Runs the indexing pipeline for the specified documents."""
-    print(f"📚 Starting indexing for documents in: {docs_path}")
+    logger.info(f"📚 Starting indexing for documents in: {docs_path}")
     validate_model_config()
     
     # Local import to avoid circular dependencies
@@ -254,12 +257,12 @@ def run_indexing(docs_path: str, config_mode: str = "default"):
     pdf_files = [os.path.join(docs_path, f) for f in os.listdir(docs_path) if f.endswith(".pdf")]
     
     if not pdf_files:
-        print("No PDF files found to index.")
+        logger.info("No PDF files found to index.")
         return
 
     # Process all documents through the pipeline
     indexing_pipeline.process_documents(pdf_files)
-    print("✅ Indexing complete.")
+    logger.info("✅ Indexing complete.")
 
 def run_chat(query: str):
     """
@@ -270,10 +273,10 @@ def run_chat(query: str):
         validate_model_config()
         ollama_client = OllamaClient(OLLAMA_CONFIG["host"])
     except ConnectionError as e:
-        print(e)
+        logger.info(e)
         return json.dumps({"error": str(e)}, indent=2)
     except ValueError as e:
-        print(f"Configuration Error: {e}")
+        logger.error(f"Configuration Error: {e}")
         return json.dumps({"error": f"Configuration Error: {e}"}, indent=2)
 
     agent = Agent(PIPELINE_CONFIGS['default'], ollama_client, OLLAMA_CONFIG)
@@ -289,14 +292,14 @@ def show_graph():
 
     graph_path = PIPELINE_CONFIGS["indexing"]["graph_path"]
     if not os.path.exists(graph_path):
-        print("Knowledge graph not found. Please run the 'index' command first.")
+        logger.info("Knowledge graph not found. Please run the 'index' command first.")
         return
 
     G = nx.read_gml(graph_path)
-    print("--- Knowledge Graph ---")
-    print("Nodes:", G.nodes(data=True))
-    print("Edges:", G.edges(data=True))
-    print("---------------------")
+    logger.info("--- Knowledge Graph ---")
+    logger.info("Nodes:", G.nodes(data=True))
+    logger.info("Edges:", G.edges(data=True))
+    logger.info("---------------------")
 
     # Optional: Visualize the graph
     try:
@@ -307,8 +310,8 @@ def show_graph():
         plt.title("Knowledge Graph Visualization")
         plt.show()
     except Exception as e:
-        print(f"\nCould not visualize the graph. Matplotlib might not be installed or configured for your environment.")
-        print(f"Error: {e}")
+        logger.warning(f"\nCould not visualize the graph. Matplotlib might not be installed or configured for your environment.")
+        logger.error(f"Error: {e}")
 
 def run_api_server():
     """Starts the advanced RAG API server."""
@@ -317,7 +320,7 @@ def run_api_server():
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python main.py [index|chat|show_graph|api] [query]")
+        logger.info("Usage: python main.py [index|chat|show_graph|api] [query]")
         return
 
     command = sys.argv[1]
@@ -327,17 +330,17 @@ def main():
         run_indexing(files)
     elif command == "chat":
         if len(sys.argv) < 3:
-            print("Usage: python main.py chat <query>")
+            logger.info("Usage: python main.py chat <query>")
             return
         query = " ".join(sys.argv[2:])
         # 🆕 Print the result for command-line usage
-        print(run_chat(query))
+        logger.info(run_chat(query))
     elif command == "show_graph":
         show_graph()
     elif command == "api":
         run_api_server()
     else:
-        print(f"Unknown command: {command}")
+        logger.info(f"Unknown command: {command}")
 
 if __name__ == "__main__":
     # This allows running the script from the command line to index documents.
@@ -363,7 +366,7 @@ if __name__ == "__main__":
         run_indexing(args.index, args.config)
     else:
         # This is where you might start a server or interactive session
-        print("No action specified. Use --index to process documents.")
+        logger.info("No action specified. Use --index to process documents.")
         # Example of how to get an agent instance
         # agent = get_agent(args.config)
-        # print(f"Agent loaded with '{args.config}' config.")
+        # logger.info(f"Agent loaded with '{args.config}' config.")

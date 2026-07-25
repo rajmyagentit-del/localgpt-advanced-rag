@@ -219,4 +219,4 @@ if __name__ == '__main__':
         "Test Processing"
     )
     
-    print(f"Processed {len(results)} items") 
+    logger.info(f"Processed {len(results)} items") 

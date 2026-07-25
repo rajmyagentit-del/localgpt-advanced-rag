@@ -29,11 +29,11 @@ INDEXING_PIPELINE = get_indexing_pipeline(AGENT_MODE)
 # --- Global Singleton for the RAG Agent ---
 # The agent is initialized once when the server starts.
 # This avoids reloading all the models on every request.
-print("🧠 Initializing RAG Agent with MAXIMUM ACCURACY... (This may take a moment)")
+logger.info("🧠 Initializing RAG Agent with MAXIMUM ACCURACY... (This may take a moment)")
 if RAG_AGENT is None:
-    print("❌ Critical error: RAG Agent could not be initialized. Exiting.")
+    logger.error("❌ Critical error: RAG Agent could not be initialized. Exiting.")
     exit(1)
-print("✅ RAG Agent initialized successfully with MAXIMUM ACCURACY.")
+logger.info("✅ RAG Agent initialized successfully with MAXIMUM ACCURACY.")
 # ---
 
 # Add helper near top after db & agent init
@@ -94,7 +94,7 @@ def _get_table_name_for_session(session_id):
         if idx and idx.get('vector_table_name'):
             table_name = idx['vector_table_name']
             logger.info(f"📊 Using table '{table_name}' for session {session_id[:8]}...")
-            print(f"📊 RAG API: Using table '{table_name}' for session {session_id[:8]}...")
+            logger.info(f"📊 RAG API: Using table '{table_name}' for session {session_id[:8]}...")
             return table_name
         else:
             logger.warning(f"⚠️ Index found but no vector table name for session {session_id}")
@@ -197,17 +197,17 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                             # We'll need to add this endpoint to the backend, for now let's make a direct database call
                             # This is a temporary solution until we add a proper API endpoint
                             db.update_session_title(session_id, title)
-                            print(f"📝 Updated session title to: {title}")
+                            logger.info(f"📝 Updated session title to: {title}")
                             
                             # 💾 STORE USER MESSAGE: Add the user message to the database
                             user_message_id = db.add_message(session_id, query, "user")
-                            print(f"💾 Stored user message: {user_message_id}")
+                            logger.info(f"💾 Stored user message: {user_message_id}")
                         else:
                             # Not the first message, but still store the user message
                             user_message_id = db.add_message(session_id, query, "user")
-                            print(f"💾 Stored user message: {user_message_id}")
+                            logger.info(f"💾 Stored user message: {user_message_id}")
                 except Exception as e:
-                    print(f"⚠️ Failed to update session title or store user message: {e}")
+                    logger.error(f"⚠️ Failed to update session title or store user message: {e}")
                     # Continue with the request even if title update fails
 
             # Allow explicit table_name override
@@ -216,7 +216,7 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                 table_name = _get_table_name_for_session(session_id)
 
             # Decide execution path
-            print(f"🔧 Force RAG flag: {force_rag}")
+            logger.info(f"🔧 Force RAG flag: {force_rag}")
             if force_rag:
                 # --- Apply runtime overrides manually because we skip Agent.run()
                 rp_cfg = RAG_AGENT.retrieval_pipeline.config
@@ -291,9 +291,9 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
             if session_id and result and result.get("answer"):
                 try:
                     ai_message_id = db.add_message(session_id, result["answer"], "assistant")
-                    print(f"💾 Stored AI response: {ai_message_id}")
+                    logger.info(f"💾 Stored AI response: {ai_message_id}")
                 except Exception as e:
-                    print(f"⚠️ Failed to store AI response: {e}")
+                    logger.error(f"⚠️ Failed to store AI response: {e}")
                     # Continue even if storage fails
 
         except json.JSONDecodeError:
@@ -356,17 +356,17 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                             # We'll need to add this endpoint to the backend, for now let's make a direct database call
                             # This is a temporary solution until we add a proper API endpoint
                             db.update_session_title(session_id, title)
-                            print(f"📝 Updated session title to: {title}")
+                            logger.info(f"📝 Updated session title to: {title}")
                             
                             # 💾 STORE USER MESSAGE: Add the user message to the database
                             user_message_id = db.add_message(session_id, query, "user")
-                            print(f"💾 Stored user message: {user_message_id}")
+                            logger.info(f"💾 Stored user message: {user_message_id}")
                         else:
                             # Not the first message, but still store the user message
                             user_message_id = db.add_message(session_id, query, "user")
-                            print(f"💾 Stored user message: {user_message_id}")
+                            logger.info(f"💾 Stored user message: {user_message_id}")
                 except Exception as e:
-                    print(f"⚠️ Failed to update session title or store user message: {e}")
+                    logger.error(f"⚠️ Failed to update session title or store user message: {e}")
                     # Continue with the request even if title update fails
 
             # Allow explicit table_name override
@@ -479,19 +479,19 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                 if session_id and final_result and final_result.get("answer"):
                     try:
                         ai_message_id = db.add_message(session_id, final_result["answer"], "assistant")
-                        print(f"💾 Stored AI response: {ai_message_id}")
+                        logger.info(f"💾 Stored AI response: {ai_message_id}")
                     except Exception as e:
-                        print(f"⚠️ Failed to store AI response: {e}")
+                        logger.error(f"⚠️ Failed to store AI response: {e}")
                         # Continue even if storage fails
             except BrokenPipeError:
-                print("🔌 Client disconnected from SSE stream.")
+                logger.info("🔌 Client disconnected from SSE stream.")
             except Exception as e:
                 # Send error event then close
                 error_payload = {"error": str(e)}
                 try:
                     emit("error", error_payload)
                 finally:
-                    print(f"❌ Stream error: {e}")
+                    logger.error(f"❌ Stream error: {e}")
 
         except json.JSONDecodeError:
             self.send_json_response({"error": "Invalid JSON"}, status_code=400)
@@ -583,9 +583,9 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                 if overview_model:
                     config_override["overview_model_name"] = overview_model
                 
-                print(f"🔧 INDEXING CONFIG: Contextual Enrichment: {enable_enrich}, Window Size: {window_size}")
-                print(f"🔧 CHUNKING CONFIG: Size: {chunk_size}, Overlap: {chunk_overlap}")
-                print(f"🔧 MODEL CONFIG: Embedding: {embedding_model or 'default'}, Enrichment: {enrich_model or 'default'}")
+                logger.info(f"🔧 INDEXING CONFIG: Contextual Enrichment: {enable_enrich}, Window Size: {window_size}")
+                logger.info(f"🔧 CHUNKING CONFIG: Size: {chunk_size}, Overlap: {chunk_overlap}")
+                logger.info(f"🔧 MODEL CONFIG: Embedding: {embedding_model or 'default'}, Enrichment: {enrich_model or 'default'}")
                 
                 # 🔧 Set index-specific overview path so each index writes separate file
                 if session_id:
@@ -641,9 +641,9 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                 if overview_model:
                     config_override["overview_model_name"] = overview_model
                 
-                print(f"🔧 INDEXING CONFIG: Contextual Enrichment: {enable_enrich}, Window Size: {window_size}")
-                print(f"🔧 CHUNKING CONFIG: Size: {chunk_size}, Overlap: {chunk_overlap}")
-                print(f"🔧 MODEL CONFIG: Embedding: {embedding_model or 'default'}, Enrichment: {enrich_model or 'default'}")
+                logger.info(f"🔧 INDEXING CONFIG: Contextual Enrichment: {enable_enrich}, Window Size: {window_size}")
+                logger.info(f"🔧 CHUNKING CONFIG: Size: {chunk_size}, Overlap: {chunk_overlap}")
+                logger.info(f"🔧 MODEL CONFIG: Embedding: {embedding_model or 'default'}, Enrichment: {enrich_model or 'default'}")
                 
                 # 🔧 Set index-specific overview path so each index writes separate file
                 if session_id:
@@ -682,7 +682,7 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     db.update_index_metadata(session_id, {"embedding_model": embedding_model})
                 except Exception as e:
-                    print(f"⚠️ Could not update embedding_model metadata: {e}")
+                    logger.warning(f"⚠️ Could not update embedding_model metadata: {e}")
 
         except json.JSONDecodeError:
             self.send_json_response({"error": "Invalid JSON"}, status_code=400)
@@ -710,7 +710,7 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                 generation_models.extend(ollama_generation_models)
                 embedding_models.extend(ollama_embedding_models)
             except Exception as e:
-                print(f"⚠️ Could not get Ollama models: {e}")
+                logger.warning(f"⚠️ Could not get Ollama models: {e}")
             
             # Add supported HuggingFace embedding models
             huggingface_embedding_models = [
@@ -747,9 +747,9 @@ def start_server(port=8001):
         allow_reuse_address = True
 
     with ReusableTCPServer(("", port), AdvancedRagApiHandler) as httpd:
-        print(f"🚀 Starting Advanced RAG API server on port {port}")
-        print(f"💬 Chat endpoint: http://localhost:{port}/chat")
-        print(f"✨ Indexing endpoint: http://localhost:{port}/index")
+        logger.info(f"🚀 Starting Advanced RAG API server on port {port}")
+        logger.info(f"💬 Chat endpoint: http://localhost:{port}/chat")
+        logger.info(f"✨ Indexing endpoint: http://localhost:{port}/index")
         httpd.serve_forever()
 
 if __name__ == "__main__":
