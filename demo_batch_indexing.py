@@ -22,6 +22,8 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 # Add the project root to the path so we can import rag_system modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -31,8 +33,8 @@ try:
     from rag_system.utils.ollama_client import OllamaClient
     from backend.database import ChatDatabase
 except ImportError as e:
-    print(f"❌ Error importing required modules: {e}")
-    print("Please ensure you're running this script from the project root directory.")
+    logger.error(f"❌ Error importing required modules: {e}")
+    logger.info("Please ensure you're running this script from the project root directory.")
     sys.exit(1)
 
 # Configure logging
@@ -70,13 +72,13 @@ class BatchIndexingDemo:
         try:
             with open(self.config_path, 'r') as f:
                 config = json.load(f)
-            print(f"✅ Loaded configuration from {self.config_path}")
+            logger.info(f"✅ Loaded configuration from {self.config_path}")
             return config
         except FileNotFoundError:
-            print(f"❌ Configuration file not found: {self.config_path}")
+            logger.error(f"❌ Configuration file not found: {self.config_path}")
             sys.exit(1)
         except json.JSONDecodeError as e:
-            print(f"❌ Invalid JSON in configuration file: {e}")
+            logger.error(f"❌ Invalid JSON in configuration file: {e}")
             sys.exit(1)
     
     def _merge_configurations(self) -> Dict[str, Any]:
@@ -103,7 +105,7 @@ class BatchIndexingDemo:
         """Validate and filter document paths."""
         valid_documents = []
         
-        print(f"📋 Validating {len(documents)} documents...")
+        logger.info(f"📋 Validating {len(documents)} documents...")
         
         for doc_path in documents:
             # Handle relative paths
@@ -115,13 +117,13 @@ class BatchIndexingDemo:
                 ext = Path(doc_path).suffix.lower()
                 if ext in ['.pdf', '.txt', '.docx', '.md', '.html', '.htm']:
                     valid_documents.append(doc_path)
-                    print(f"  ✅ {doc_path}")
+                    logger.info(f"  ✅ {doc_path}")
                 else:
-                    print(f"  ⚠️  Unsupported file type: {doc_path}")
+                    logger.warning(f"  ⚠️  Unsupported file type: {doc_path}")
             else:
-                print(f"  ❌ File not found: {doc_path}")
+                logger.error(f"  ❌ File not found: {doc_path}")
         
-        print(f"📊 {len(valid_documents)} valid documents found")
+        logger.info(f"📊 {len(valid_documents)} valid documents found")
         return valid_documents
     
     def create_indexes(self) -> List[str]:
@@ -145,17 +147,17 @@ class BatchIndexingDemo:
             documents = index_config.get("documents", [])
             
             if not documents:
-                print(f"⚠️  No documents specified for index '{index_name}', skipping...")
+                logger.warning(f"⚠️  No documents specified for index '{index_name}', skipping...")
                 return None
             
             # Validate documents
             valid_documents = self.validate_documents(documents)
             if not valid_documents:
-                print(f"❌ No valid documents found for index '{index_name}'")
+                logger.error(f"❌ No valid documents found for index '{index_name}'")
                 return None
             
-            print(f"\n🚀 Creating index: {index_name}")
-            print(f"📄 Processing {len(valid_documents)} documents")
+            logger.info(f"\n🚀 Creating index: {index_name}")
+            logger.info(f"📄 Processing {len(valid_documents)} documents")
             
             # Create index record in database
             index_metadata = {
@@ -181,52 +183,52 @@ class BatchIndexingDemo:
             self.pipeline.process_documents(valid_documents)
             processing_time = time.time() - start_time
             
-            print(f"✅ Index '{index_name}' created successfully!")
-            print(f"   Index ID: {index_id}")
-            print(f"   Processing time: {processing_time:.2f} seconds")
-            print(f"   Documents processed: {len(valid_documents)}")
+            logger.info(f"✅ Index '{index_name}' created successfully!")
+            logger.info(f"   Index ID: {index_id}")
+            logger.info(f"   Processing time: {processing_time:.2f} seconds")
+            logger.info(f"   Documents processed: {len(valid_documents)}")
             
             return index_id
             
         except Exception as e:
-            print(f"❌ Error creating index '{index_name}': {e}")
+            logger.error(f"❌ Error creating index '{index_name}': {e}")
             import traceback
             traceback.print_exc()
             return None
     
     def demonstrate_features(self):
         """Demonstrate various indexing features."""
-        print("\n🎯 Batch Indexing Demo Features:")
-        print("=" * 50)
+        logger.info("\n🎯 Batch Indexing Demo Features:")
+        logger.info("=" * 50)
         
         # Show configuration
-        print(f"📋 Configuration file: {self.config_path}")
-        print(f"📊 Number of indexes to create: {len(self.config.get('indexes', []))}")
+        logger.info(f"📋 Configuration file: {self.config_path}")
+        logger.info(f"📊 Number of indexes to create: {len(self.config.get('indexes', []))}")
         
         # Show pipeline settings
         pipeline_settings = self.config.get("pipeline_settings", {})
         if pipeline_settings:
-            print("\n⚙️  Pipeline Settings:")
+            logger.info("\n⚙️  Pipeline Settings:")
             for key, value in pipeline_settings.items():
-                print(f"   {key}: {value}")
+                logger.info(f"   {key}: {value}")
         
         # Show model configuration
         ollama_config = self.config.get("ollama_config", {})
         if ollama_config:
-            print("\n🤖 Model Configuration:")
+            logger.info("\n🤖 Model Configuration:")
             for key, value in ollama_config.items():
-                print(f"   {key}: {value}")
+                logger.info(f"   {key}: {value}")
     
     def run_demo(self):
         """Run the complete batch indexing demo."""
-        print("🚀 LocalGPT Batch Indexing Demo")
-        print("=" * 50)
+        logger.info("🚀 LocalGPT Batch Indexing Demo")
+        logger.info("=" * 50)
         
         # Show demo features
         self.demonstrate_features()
         
         # Create indexes
-        print(f"\n📚 Starting batch indexing process...")
+        logger.info(f"\n📚 Starting batch indexing process...")
         start_time = time.time()
         
         created_indexes = self.create_indexes()
@@ -234,21 +236,21 @@ class BatchIndexingDemo:
         total_time = time.time() - start_time
         
         # Summary
-        print(f"\n📊 Batch Indexing Summary")
-        print("=" * 50)
-        print(f"✅ Successfully created {len(created_indexes)} indexes")
-        print(f"⏱️  Total processing time: {total_time:.2f} seconds")
+        logger.info(f"\n📊 Batch Indexing Summary")
+        logger.info("=" * 50)
+        logger.info(f"✅ Successfully created {len(created_indexes)} indexes")
+        logger.info(f"⏱️  Total processing time: {total_time:.2f} seconds")
         
         if created_indexes:
-            print(f"\n📋 Created Indexes:")
+            logger.info(f"\n📋 Created Indexes:")
             for i, index_id in enumerate(created_indexes, 1):
                 index_info = self.db.get_index(index_id)
                 if index_info:
-                    print(f"   {i}. {index_info['name']} ({index_id[:8]}...)")
-                    print(f"      Documents: {len(index_info.get('documents', []))}")
+                    logger.info(f"   {i}. {index_info['name']} ({index_id[:8]}...)")
+                    logger.info(f"      Documents: {len(index_info.get('documents', []))}")
         
-        print(f"\n🎉 Demo completed successfully!")
-        print(f"💡 You can now use these indexes in the LocalGPT interface.")
+        logger.info(f"\n🎉 Demo completed successfully!")
+        logger.info(f"💡 You can now use these indexes in the LocalGPT interface.")
 
 
 def create_sample_config():
@@ -325,9 +327,9 @@ def create_sample_config():
     with open(config_filename, "w") as f:
         json.dump(sample_config, f, indent=2)
     
-    print(f"✅ Sample configuration created: {config_filename}")
-    print(f"📝 Edit this file to customize your batch indexing setup")
-    print(f"🚀 Run: python demo_batch_indexing.py --config {config_filename}")
+    logger.info(f"✅ Sample configuration created: {config_filename}")
+    logger.info(f"📝 Edit this file to customize your batch indexing setup")
+    logger.info(f"🚀 Run: python demo_batch_indexing.py --config {config_filename}")
 
 
 def main():
@@ -366,8 +368,8 @@ comprehensive processing pipelines.
         return
     
     if not os.path.exists(args.config):
-        print(f"❌ Configuration file not found: {args.config}")
-        print(f"💡 Create a sample config with: python {sys.argv[0]} --create-sample-config")
+        logger.error(f"❌ Configuration file not found: {args.config}")
+        logger.info(f"💡 Create a sample config with: python {sys.argv[0]} --create-sample-config")
         sys.exit(1)
     
     try:
@@ -375,9 +377,9 @@ comprehensive processing pipelines.
         demo.run_demo()
         
     except KeyboardInterrupt:
-        print("\n\n❌ Demo cancelled by user.")
+        logger.error("\n\n❌ Demo cancelled by user.")
     except Exception as e:
-        print(f"❌ Demo failed: {e}")
+        logger.error(f"❌ Demo failed: {e}")
         import traceback
         traceback.print_exc()
 

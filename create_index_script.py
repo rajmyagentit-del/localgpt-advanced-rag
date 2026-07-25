@@ -18,6 +18,9 @@ import json
 import argparse
 from typing import List, Optional
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Add the project root to the path so we can import rag_system modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,8 +31,8 @@ try:
     from rag_system.utils.ollama_client import OllamaClient
     from backend.database import ChatDatabase
 except ImportError as e:
-    print(f"❌ Error importing required modules: {e}")
-    print("Please ensure you're running this script from the project root directory.")
+    logger.error(f"❌ Error importing required modules: {e}")
+    logger.info("Please ensure you're running this script from the project root directory.")
     sys.exit(1)
 
 
@@ -62,8 +65,8 @@ class IndexCreator:
                 with open(config_path, 'r') as f:
                     return json.load(f)
             except Exception as e:
-                print(f"⚠️  Error loading config from {config_path}: {e}")
-                print("Using default configuration...")
+                logger.error(f"⚠️  Error loading config from {config_path}: {e}")
+                logger.info("Using default configuration...")
         
         return PIPELINE_CONFIGS.get("default", {})
     
@@ -76,17 +79,17 @@ class IndexCreator:
     
     def select_documents(self) -> List[str]:
         """Interactive document selection."""
-        print("\n📁 Document Selection")
-        print("=" * 50)
+        logger.info("\n📁 Document Selection")
+        logger.info("=" * 50)
         
         documents = []
         
         while True:
-            print("\nOptions:")
-            print("1. Add a single document")
-            print("2. Add all documents from a directory")
-            print("3. Finish and proceed with selected documents")
-            print("4. Show selected documents")
+            logger.info("\nOptions:")
+            logger.info("1. Add a single document")
+            logger.info("2. Add all documents from a directory")
+            logger.info("3. Finish and proceed with selected documents")
+            logger.info("4. Show selected documents")
             
             choice = self.get_user_input("Select an option (1-4)", "1")
             
@@ -94,9 +97,9 @@ class IndexCreator:
                 doc_path = self.get_user_input("Enter document path")
                 if os.path.exists(doc_path):
                     documents.append(os.path.abspath(doc_path))
-                    print(f"✅ Added: {doc_path}")
+                    logger.info(f"✅ Added: {doc_path}")
                 else:
-                    print(f"❌ File not found: {doc_path}")
+                    logger.error(f"❌ File not found: {doc_path}")
             
             elif choice == "2":
                 dir_path = self.get_user_input("Enter directory path")
@@ -109,56 +112,56 @@ class IndexCreator:
                         found_docs.extend(Path(dir_path).glob(f"**/*{ext}"))
                     
                     if found_docs:
-                        print(f"Found {len(found_docs)} documents:")
+                        logger.info(f"Found {len(found_docs)} documents:")
                         for doc in found_docs:
-                            print(f"  - {doc}")
+                            logger.info(f"  - {doc}")
                         
                         if self.get_user_input("Add all these documents? (y/n)", "y").lower() == 'y':
                             documents.extend([str(doc.absolute()) for doc in found_docs])
-                            print(f"✅ Added {len(found_docs)} documents")
+                            logger.info(f"✅ Added {len(found_docs)} documents")
                     else:
-                        print("❌ No supported documents found in directory")
+                        logger.error("❌ No supported documents found in directory")
                 else:
-                    print(f"❌ Directory not found: {dir_path}")
+                    logger.error(f"❌ Directory not found: {dir_path}")
             
             elif choice == "3":
                 if documents:
                     break
                 else:
-                    print("❌ No documents selected. Please add at least one document.")
+                    logger.error("❌ No documents selected. Please add at least one document.")
             
             elif choice == "4":
                 if documents:
-                    print(f"\n📄 Selected documents ({len(documents)}):")
+                    logger.info(f"\n📄 Selected documents ({len(documents)}):")
                     for i, doc in enumerate(documents, 1):
-                        print(f"  {i}. {doc}")
+                        logger.info(f"  {i}. {doc}")
                 else:
-                    print("No documents selected yet.")
+                    logger.info("No documents selected yet.")
             
             else:
-                print("Invalid choice. Please select 1-4.")
+                logger.info("Invalid choice. Please select 1-4.")
         
         return documents
     
     def configure_processing(self) -> dict:
         """Interactive processing configuration."""
-        print("\n⚙️  Processing Configuration")
-        print("=" * 50)
+        logger.info("\n⚙️  Processing Configuration")
+        logger.info("=" * 50)
         
-        print("Configure how documents will be processed:")
+        logger.info("Configure how documents will be processed:")
         
         # Basic settings
         chunk_size = int(self.get_user_input("Chunk size", "512"))
         chunk_overlap = int(self.get_user_input("Chunk overlap", "64"))
         
         # Advanced settings
-        print("\nAdvanced options:")
+        logger.info("\nAdvanced options:")
         enable_enrich = self.get_user_input("Enable contextual enrichment? (y/n)", "y").lower() == 'y'
         enable_latechunk = self.get_user_input("Enable late chunking? (y/n)", "y").lower() == 'y'
         enable_docling = self.get_user_input("Enable Docling chunking? (y/n)", "y").lower() == 'y'
         
         # Model selection
-        print("\nModel Configuration:")
+        logger.info("\nModel Configuration:")
         embedding_model = self.get_user_input("Embedding model", "Qwen/Qwen3-Embedding-0.6B")
         generation_model = self.get_user_input("Generation model", "qwen3:0.6b")
         
@@ -176,8 +179,8 @@ class IndexCreator:
     
     def create_index_interactive(self) -> None:
         """Run the interactive index creation process."""
-        print("🚀 LocalGPT Index Creation Tool")
-        print("=" * 50)
+        logger.info("🚀 LocalGPT Index Creation Tool")
+        logger.info("=" * 50)
         
         # Get index details
         index_name = self.get_user_input("Enter index name")
@@ -190,22 +193,22 @@ class IndexCreator:
         processing_config = self.configure_processing()
         
         # Confirm creation
-        print("\n📋 Index Summary")
-        print("=" * 50)
-        print(f"Name: {index_name}")
-        print(f"Description: {index_description or 'None'}")
-        print(f"Documents: {len(documents)}")
-        print(f"Chunk size: {processing_config['chunk_size']}")
-        print(f"Enrichment: {'Enabled' if processing_config['enable_enrich'] else 'Disabled'}")
-        print(f"Embedding model: {processing_config['embedding_model']}")
+        logger.info("\n📋 Index Summary")
+        logger.info("=" * 50)
+        logger.info(f"Name: {index_name}")
+        logger.info(f"Description: {index_description or 'None'}")
+        logger.info(f"Documents: {len(documents)}")
+        logger.info(f"Chunk size: {processing_config['chunk_size']}")
+        logger.info(f"Enrichment: {'Enabled' if processing_config['enable_enrich'] else 'Disabled'}")
+        logger.info(f"Embedding model: {processing_config['embedding_model']}")
         
         if self.get_user_input("\nProceed with index creation? (y/n)", "y").lower() != 'y':
-            print("❌ Index creation cancelled.")
+            logger.error("❌ Index creation cancelled.")
             return
         
         # Create the index
         try:
-            print("\n🔥 Creating index...")
+            logger.info("\n🔥 Creating index...")
             
             # Create index record in database
             index_id = self.db.create_index(
@@ -220,27 +223,27 @@ class IndexCreator:
                 self.db.add_document_to_index(index_id, filename, doc_path)
             
             # Process documents through pipeline
-            print("📚 Processing documents...")
+            logger.info("📚 Processing documents...")
             self.pipeline.process_documents(documents)
             
-            print(f"\n✅ Index '{index_name}' created successfully!")
-            print(f"Index ID: {index_id}")
-            print(f"Processed {len(documents)} documents")
+            logger.info(f"\n✅ Index '{index_name}' created successfully!")
+            logger.info(f"Index ID: {index_id}")
+            logger.info(f"Processed {len(documents)} documents")
             
             # Test the index
             if self.get_user_input("\nTest the index with a sample query? (y/n)", "y").lower() == 'y':
                 self.test_index(index_id)
                 
         except Exception as e:
-            print(f"❌ Error creating index: {e}")
+            logger.error(f"❌ Error creating index: {e}")
             import traceback
             traceback.print_exc()
     
     def test_index(self, index_id: str) -> None:
         """Test the created index with a sample query."""
         try:
-            print("\n🧪 Testing Index")
-            print("=" * 50)
+            logger.info("\n🧪 Testing Index")
+            logger.info("=" * 50)
             
             # Get agent for testing
             agent = get_agent("default")
@@ -248,14 +251,14 @@ class IndexCreator:
             # Test query
             test_query = self.get_user_input("Enter a test query", "What is this document about?")
             
-            print(f"\nProcessing query: {test_query}")
+            logger.info(f"\nProcessing query: {test_query}")
             response = agent.run(test_query, table_name=f"text_pages_{index_id}")
             
-            print(f"\n🤖 Response:")
-            print(response)
+            logger.info(f"\n🤖 Response:")
+            logger.info(response)
             
         except Exception as e:
-            print(f"❌ Error testing index: {e}")
+            logger.error(f"❌ Error testing index: {e}")
     
     def batch_create_from_config(self, config_file: str) -> None:
         """Create index from batch configuration file."""
@@ -269,7 +272,7 @@ class IndexCreator:
             processing_config = batch_config.get("processing", {})
             
             if not documents:
-                print("❌ No documents specified in batch configuration")
+                logger.error("❌ No documents specified in batch configuration")
                 return
             
             # Validate documents exist
@@ -278,14 +281,14 @@ class IndexCreator:
                 if os.path.exists(doc_path):
                     valid_documents.append(doc_path)
                 else:
-                    print(f"⚠️  Document not found: {doc_path}")
+                    logger.warning(f"⚠️  Document not found: {doc_path}")
             
             if not valid_documents:
-                print("❌ No valid documents found")
+                logger.error("❌ No valid documents found")
                 return
             
-            print(f"🚀 Creating batch index: {index_name}")
-            print(f"📄 Processing {len(valid_documents)} documents...")
+            logger.info(f"🚀 Creating batch index: {index_name}")
+            logger.info(f"📄 Processing {len(valid_documents)} documents...")
             
             # Create index
             index_id = self.db.create_index(
@@ -302,11 +305,11 @@ class IndexCreator:
             # Process documents
             self.pipeline.process_documents(valid_documents)
             
-            print(f"✅ Batch index '{index_name}' created successfully!")
-            print(f"Index ID: {index_id}")
+            logger.info(f"✅ Batch index '{index_name}' created successfully!")
+            logger.info(f"Index ID: {index_id}")
             
         except Exception as e:
-            print(f"❌ Error creating batch index: {e}")
+            logger.error(f"❌ Error creating batch index: {e}")
             import traceback
             traceback.print_exc()
 
@@ -336,7 +339,7 @@ def create_sample_batch_config():
     with open("batch_indexing_config.json", "w") as f:
         json.dump(sample_config, f, indent=2)
     
-    print("📄 Sample batch configuration created: batch_indexing_config.json")
+    logger.info("📄 Sample batch configuration created: batch_indexing_config.json")
 
 
 def main():
@@ -361,9 +364,9 @@ def main():
             creator.create_index_interactive()
             
     except KeyboardInterrupt:
-        print("\n\n❌ Operation cancelled by user.")
+        logger.error("\n\n❌ Operation cancelled by user.")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        logger.error(f"❌ Unexpected error: {e}")
         import traceback
         traceback.print_exc()
 

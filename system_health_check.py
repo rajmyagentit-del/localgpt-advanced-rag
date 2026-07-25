@@ -7,15 +7,18 @@ Quick validation of configurations, models, and data access.
 import sys
 import traceback
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 def print_status(message, success=None):
     """Print status with emoji"""
     if success is True:
-        print(f"✅ {message}")
+        logger.info(f"✅ {message}")
     elif success is False:
-        print(f"❌ {message}")
+        logger.error(f"❌ {message}")
     else:
-        print(f"🔍 {message}")
+        logger.debug(f"🔍 {message}")
 
 def check_imports():
     """Test basic imports"""
@@ -34,9 +37,9 @@ def check_configurations():
     try:
         from rag_system.main import EXTERNAL_MODELS, OLLAMA_CONFIG, PIPELINE_CONFIGS
         
-        print(f"📊 External Models: {EXTERNAL_MODELS}")
-        print(f"📊 Ollama Config: {OLLAMA_CONFIG}")
-        print(f"📊 Pipeline Configs: {PIPELINE_CONFIGS}")
+        logger.info(f"📊 External Models: {EXTERNAL_MODELS}")
+        logger.info(f"📊 Ollama Config: {OLLAMA_CONFIG}")
+        logger.info(f"📊 Pipeline Configs: {PIPELINE_CONFIGS}")
         
         # Check for common model dimension issues
         embedding_model = EXTERNAL_MODELS.get("embedding_model", "Unknown")
@@ -100,11 +103,11 @@ def check_database_access():
         
         print_status(f"LanceDB connected - {len(tables)} tables available", True)
         if tables:
-            print("📋 Available tables:")
+            logger.info("📋 Available tables:")
             for table in tables[:5]:  # Show first 5 tables
-                print(f"   - {table}")
+                logger.info(f"   - {table}")
             if len(tables) > 5:
-                print(f"   ... and {len(tables) - 5} more")
+                logger.info(f"   ... and {len(tables) - 5} more")
         else:
             print_status("No tables found - may need to index documents first", None)
             
@@ -133,8 +136,8 @@ def check_sample_query(agent):
         
         if result and 'answer' in result:
             print_status("Sample query successful", True)
-            print(f"📝 Answer preview: {result['answer'][:100]}...")
-            print(f"📊 Found {len(result.get('source_documents', []))} source documents")
+            logger.info(f"📝 Answer preview: {result['answer'][:100]}...")
+            logger.info(f"📊 Found {len(result.get('source_documents', []))} source documents")
         else:
             print_status("Query returned empty result", None)
             
@@ -145,8 +148,8 @@ def check_sample_query(agent):
 
 def main():
     """Run complete system health check"""
-    print("🏥 RAG System Health Check")
-    print("=" * 50)
+    logger.info("🏥 RAG System Health Check")
+    logger.info("=" * 50)
     
     checks_passed = 0
     total_checks = 6
@@ -173,8 +176,8 @@ def main():
             checks_passed += 1
     
     # Summary
-    print("\n" + "=" * 50)
-    print(f"🏥 Health Check Complete: {checks_passed}/{total_checks} checks passed")
+    logger.info("\n" + "=" * 50)
+    logger.info(f"🏥 Health Check Complete: {checks_passed}/{total_checks} checks passed")
     
     if checks_passed == total_checks:
         print_status("System is healthy! 🎉", True)
