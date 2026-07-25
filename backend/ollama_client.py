@@ -2,6 +2,9 @@ import requests
 import json
 import os
 from typing import List, Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 class OllamaClient:
     def __init__(self, base_url: Optional[str] = None):
@@ -27,7 +30,7 @@ class OllamaClient:
                 return [model["name"] for model in models]
             return []
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching models: {e}")
+            logger.error(f"Error fetching models: {e}")
             return []
     
     def pull_model(self, model_name: str) -> bool:
@@ -40,18 +43,18 @@ class OllamaClient:
             )
             
             if response.status_code == 200:
-                print(f"Pulling model {model_name}...")
+                logger.info(f"Pulling model {model_name}...")
                 for line in response.iter_lines():
                     if line:
                         data = json.loads(line)
                         if "status" in data:
-                            print(f"Status: {data['status']}")
+                            logger.info(f"Status: {data['status']}")
                         if data.get("status") == "success":
                             return True
                 return True
             return False
         except requests.exceptions.RequestException as e:
-            print(f"Error pulling model: {e}")
+            logger.error(f"Error pulling model: {e}")
             return False
     
     def chat(self, message: str, model: str = "llama3.2", conversation_history: List[Dict] = None, enable_thinking: bool = True) -> str:
@@ -172,31 +175,31 @@ def main():
     
     # Check if Ollama is running
     if not client.is_ollama_running():
-        print("❌ Ollama is not running. Please start Ollama first.")
-        print("Install: https://ollama.ai")
-        print("Run: ollama serve")
+        logger.error("❌ Ollama is not running. Please start Ollama first.")
+        logger.info("Install: https://ollama.ai")
+        logger.info("Run: ollama serve")
         return
     
-    print("✅ Ollama is running!")
+    logger.info("✅ Ollama is running!")
     
     # List available models
     models = client.list_models()
-    print(f"Available models: {models}")
+    logger.info(f"Available models: {models}")
     
     # Try to use llama3.2, pull if needed
     model_name = "llama3.2"
     if model_name not in [m.split(":")[0] for m in models]:
-        print(f"Model {model_name} not found. Pulling...")
+        logger.info(f"Model {model_name} not found. Pulling...")
         if client.pull_model(model_name):
-            print(f"✅ Model {model_name} pulled successfully!")
+            logger.info(f"✅ Model {model_name} pulled successfully!")
         else:
-            print(f"❌ Failed to pull model {model_name}")
+            logger.error(f"❌ Failed to pull model {model_name}")
             return
     
     # Test chat
-    print("\n🤖 Testing chat...")
+    logger.info("\n🤖 Testing chat...")
     response = client.chat("Hello! Can you tell me a short joke?", model_name)
-    print(f"AI: {response}")
+    logger.info(f"AI: {response}")
 
 if __name__ == "__main__":
     main()    

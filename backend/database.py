@@ -3,6 +3,9 @@ import uuid
 import json
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ChatDatabase:
     def __init__(self, db_path: str = None):
@@ -103,7 +106,7 @@ class ChatDatabase:
         
         conn.commit()
         conn.close()
-        print("✅ Database initialized successfully")
+        logger.info("✅ Database initialized successfully")
     
     def create_session(self, title: str, model: str) -> str:
         """Create a new chat session"""
@@ -118,7 +121,7 @@ class ChatDatabase:
         conn.commit()
         conn.close()
         
-        print(f"📝 Created new session: {session_id[:8]}... - {title}")
+        logger.info(f"📝 Created new session: {session_id[:8]}... - {title}")
         return session_id
     
     def get_sessions(self, limit: int = 50) -> List[Dict]:
@@ -236,7 +239,7 @@ class ChatDatabase:
         conn.close()
         
         if deleted:
-            print(f"🗑️ Deleted session: {session_id[:8]}...")
+            logger.info(f"🗑️ Deleted session: {session_id[:8]}...")
         
         return deleted
     
@@ -259,13 +262,13 @@ class ChatDatabase:
             cursor = conn.execute('DELETE FROM sessions WHERE id = ?', (session_id,))
             if cursor.rowcount > 0:
                 deleted_count += 1
-                print(f"🗑️ Cleaned up empty session: {session_id[:8]}...")
+                logger.info(f"🗑️ Cleaned up empty session: {session_id[:8]}...")
         
         conn.commit()
         conn.close()
         
         if deleted_count > 0:
-            print(f"✨ Cleaned up {deleted_count} empty sessions")
+            logger.info(f"✨ Cleaned up {deleted_count} empty sessions")
         
         return deleted_count
     
@@ -309,7 +312,7 @@ class ChatDatabase:
         doc_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        print(f"📄 Added document '{file_path}' to session {session_id[:8]}...")
+        logger.info(f"📄 Added document '{file_path}' to session {session_id[:8]}...")
         return doc_id
 
     def get_documents_for_session(self, session_id: str) -> List[str]:
@@ -336,7 +339,7 @@ class ChatDatabase:
         ''', (idx_id, name, description, created, created, vector_table, json.dumps(metadata or {})))
         conn.commit()
         conn.close()
-        print(f"📂 Created new index '{name}' ({idx_id[:8]})")
+        logger.info(f"📂 Created new index '{name}' ({idx_id[:8]})")
         return idx_id
 
     def get_index(self, index_id: str) -> dict | None:
@@ -409,7 +412,7 @@ class ChatDatabase:
             conn.close()
 
         if deleted:
-            print(f"🗑️ Deleted index {index_id[:8]}... and related records")
+            logger.info(f"🗑️ Deleted index {index_id[:8]}... and related records")
             # Optional: attempt to drop LanceDB table if available
             if vector_table_name:
                 try:
@@ -420,9 +423,9 @@ class ChatDatabase:
                     db = ldb.db
                     if hasattr(db, 'table_names') and vector_table_name in db.table_names():
                         db.drop_table(vector_table_name)
-                        print(f"🚮 Dropped LanceDB table '{vector_table_name}'")
+                        logger.info(f"🚮 Dropped LanceDB table '{vector_table_name}'")
                 except Exception as e:
-                    print(f"⚠️ Could not drop LanceDB table '{vector_table_name}': {e}")
+                    logger.warning(f"⚠️ Could not drop LanceDB table '{vector_table_name}': {e}")
         return deleted
 
     def update_index_metadata(self, index_id: str, updates: dict):
@@ -482,7 +485,7 @@ class ChatDatabase:
                             'metadata_source': 'lancedb_inspection'
                         }
                         self.update_index_metadata(index_id, inferred_metadata)
-                        print(f"⚠️ Index {index_id[:8]}... appears incomplete - vector table missing")
+                        logger.warning(f"⚠️ Index {index_id[:8]}... appears incomplete - vector table missing")
                         return inferred_metadata
                     
                     # Get table and inspect schema/data
@@ -505,7 +508,7 @@ class ChatDatabase:
                         # Take only first row for inspection
                         sample_df = sample_df.head(1)
                     except Exception as e:
-                        print(f"⚠️ Could not read data from table {vector_table_name}: {e}")
+                        logger.warning(f"⚠️ Could not read data from table {vector_table_name}: {e}")
                         return {}
                     
                     # Infer metadata from table structure
@@ -580,13 +583,13 @@ class ChatDatabase:
                     # Update the database with inferred metadata
                     if inferred_metadata:
                         self.update_index_metadata(index_id, inferred_metadata)
-                        print(f"🔍 Inferred metadata for index {index_id[:8]}...: {len(inferred_metadata)} fields")
+                        logger.debug(f"🔍 Inferred metadata for index {index_id[:8]}...: {len(inferred_metadata)} fields")
                     
                     return inferred_metadata
                     
                 except ImportError as import_error:
                     # RAG system modules not available - provide basic fallback metadata
-                    print(f"⚠️ RAG system modules not available for inspection: {import_error}")
+                    logger.error(f"⚠️ RAG system modules not available for inspection: {import_error}")
                     
                     # Check if this is actually a legacy index by looking at creation date
                     created_at = index_info.get('created_at', '')
@@ -625,15 +628,15 @@ class ChatDatabase:
                     
                     self.update_index_metadata(index_id, fallback_metadata)
                     status_msg = "recent but limited inspection" if is_recent else "legacy"
-                    print(f"📝 Added fallback metadata for {status_msg} index {index_id[:8]}...")
+                    logger.info(f"📝 Added fallback metadata for {status_msg} index {index_id[:8]}...")
                     return fallback_metadata
                     
             except Exception as e:
-                print(f"⚠️ Could not inspect LanceDB table for index {index_id[:8]}...: {e}")
+                logger.warning(f"⚠️ Could not inspect LanceDB table for index {index_id[:8]}...: {e}")
                 return {}
                 
         except Exception as e:
-            print(f"⚠️ Failed to inspect index metadata for {index_id[:8]}...: {e}")
+            logger.error(f"⚠️ Failed to inspect index metadata for {index_id[:8]}...: {e}")
             return {}
 
 def generate_session_title(first_message: str, max_length: int = 50) -> str:
@@ -668,7 +671,7 @@ db = ChatDatabase()
 
 if __name__ == "__main__":
     # Test the database
-    print("🧪 Testing database...")
+    logger.info("🧪 Testing database...")
     
     # Create a test session
     session_id = db.create_session("Test Chat", "llama3.2:latest")
@@ -679,14 +682,14 @@ if __name__ == "__main__":
     
     # Get messages
     messages = db.get_messages(session_id)
-    print(f"📨 Messages: {len(messages)}")
+    logger.info(f"📨 Messages: {len(messages)}")
     
     # Get sessions
     sessions = db.get_sessions()
-    print(f"📋 Sessions: {len(sessions)}")
+    logger.info(f"📋 Sessions: {len(sessions)}")
     
     # Get stats
     stats = db.get_stats()
-    print(f"📊 Stats: {stats}")
+    logger.info(f"📊 Stats: {stats}")
     
-    print("✅ Database test completed!")  
+    logger.info("✅ Database test completed!")  
