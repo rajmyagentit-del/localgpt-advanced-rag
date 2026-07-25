@@ -1,7 +1,8 @@
-import os
-import json
-import sys
 import argparse
+import json
+import os
+import sys
+
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -11,9 +12,11 @@ load_dotenv()
 # This script should be run as a module from the project root, e.g.:
 # python -m rag_system.main api
 
-from rag_system.agent.loop import Agent
-from rag_system.utils.ollama_client import OllamaClient
 import logging
+
+from rag_system.agent.loop import Agent
+from rag_system.config import settings
+from rag_system.utils.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 # Configuration is now defined in this file - no import needed
@@ -22,6 +25,10 @@ logger = logging.getLogger(__name__)
 # ==================================
 # This file contains the MASTER configuration for all models used in the RAG system.
 # All components should reference these configurations to ensure consistency.
+#
+# Environment-derived values (hosts, API keys, backend selection) now come
+# from rag_system.config.settings (a validated Pydantic Settings object)
+# instead of scattered os.getenv() calls - see rag_system/config.py.
 
 # ============================================================================
 # 🎯 MASTER MODEL CONFIGURATION
@@ -29,21 +36,21 @@ logger = logging.getLogger(__name__)
 # All model configurations are centralized here to prevent conflicts
 
 # LLM Backend Configuration
-LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama")
+LLM_BACKEND = settings.llm_backend
 
 # Ollama Models Configuration (for inference via Ollama)
 OLLAMA_CONFIG = {
-    "host": os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+    "host": settings.ollama_host,
     "generation_model": "qwen3:8b",  # Main text generation model
     "enrichment_model": "qwen3:0.6b",  # Lightweight model for routing/enrichment
 }
 
 WATSONX_CONFIG = {
-    "api_key": os.getenv("WATSONX_API_KEY", ""),
-    "project_id": os.getenv("WATSONX_PROJECT_ID", ""),
-    "url": os.getenv("WATSONX_URL", "https://us-south.ml.cloud.ibm.com"),
-    "generation_model": os.getenv("WATSONX_GENERATION_MODEL", "ibm/granite-13b-chat-v2"),
-    "enrichment_model": os.getenv("WATSONX_ENRICHMENT_MODEL", "ibm/granite-8b-japanese"),  # Lightweight model
+    "api_key": settings.watsonx_api_key,
+    "project_id": settings.watsonx_project_id,
+    "url": settings.watsonx_url,
+    "generation_model": settings.watsonx_generation_model,
+    "enrichment_model": settings.watsonx_enrichment_model,
 }
 
 # External Model Configuration (HuggingFace models used directly)
@@ -195,11 +202,11 @@ def get_agent(mode: str = "default") -> Agent:
             url=WATSONX_CONFIG["url"]
         )
         llm_config = WATSONX_CONFIG
-        logger.info(f"🔧 Using Watson X backend with granite models")
+        logger.info("🔧 Using Watson X backend with granite models")
     else:
         llm_client = OllamaClient(host=OLLAMA_CONFIG["host"])
         llm_config = OLLAMA_CONFIG
-        logger.info(f"🔧 Using Ollama backend")
+        logger.info("🔧 Using Ollama backend")
     
     # Get the configuration for the specified mode
     config = PIPELINE_CONFIGS.get(mode, PIPELINE_CONFIGS['default'])
@@ -287,8 +294,8 @@ def show_graph():
     """
     Loads and displays the knowledge graph.
     """
-    import networkx as nx
     import matplotlib.pyplot as plt
+    import networkx as nx
 
     graph_path = PIPELINE_CONFIGS["indexing"]["graph_path"]
     if not os.path.exists(graph_path):
@@ -310,7 +317,7 @@ def show_graph():
         plt.title("Knowledge Graph Visualization")
         plt.show()
     except Exception as e:
-        logger.warning(f"\nCould not visualize the graph. Matplotlib might not be installed or configured for your environment.")
+        logger.warning("\nCould not visualize the graph. Matplotlib might not be installed or configured for your environment.")
         logger.error(f"Error: {e}")
 
 def run_api_server():

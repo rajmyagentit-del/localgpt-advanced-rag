@@ -1,9 +1,8 @@
+import json
+import logging
 import sqlite3
 import uuid
-import json
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +123,7 @@ class ChatDatabase:
         logger.info(f"📝 Created new session: {session_id[:8]}... - {title}")
         return session_id
     
-    def get_sessions(self, limit: int = 50) -> List[Dict]:
+    def get_sessions(self, limit: int = 50) -> list[dict]:
         """Get all chat sessions, ordered by most recent"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -141,7 +140,7 @@ class ChatDatabase:
         
         return sessions
     
-    def get_session(self, session_id: str) -> Optional[Dict]:
+    def get_session(self, session_id: str) -> dict | None:
         """Get a specific session"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -157,7 +156,7 @@ class ChatDatabase:
         
         return dict(row) if row else None
     
-    def add_message(self, session_id: str, content: str, sender: str, metadata: Dict = None) -> str:
+    def add_message(self, session_id: str, content: str, sender: str, metadata: dict = None) -> str:
         """Add a message to a session"""
         message_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
@@ -184,7 +183,7 @@ class ChatDatabase:
         
         return message_id
     
-    def get_messages(self, session_id: str, limit: int = 100) -> List[Dict]:
+    def get_messages(self, session_id: str, limit: int = 100) -> list[dict]:
         """Get all messages for a session"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -206,7 +205,7 @@ class ChatDatabase:
         conn.close()
         return messages
     
-    def get_conversation_history(self, session_id: str) -> List[Dict]:
+    def get_conversation_history(self, session_id: str) -> list[dict]:
         """Get conversation history in the format expected by Ollama"""
         messages = self.get_messages(session_id)
         
@@ -272,7 +271,7 @@ class ChatDatabase:
         
         return deleted_count
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Get database statistics"""
         conn = sqlite3.connect(self.db_path)
         
@@ -315,7 +314,7 @@ class ChatDatabase:
         logger.info(f"📄 Added document '{file_path}' to session {session_id[:8]}...")
         return doc_id
 
-    def get_documents_for_session(self, session_id: str) -> List[str]:
+    def get_documents_for_session(self, session_id: str) -> list[str]:
         """Retrieves all document file paths for a given session."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute(
@@ -416,9 +415,9 @@ class ChatDatabase:
             # Optional: attempt to drop LanceDB table if available
             if vector_table_name:
                 try:
+                    from rag_system.config import settings
                     from rag_system.indexing.embedders import LanceDBManager
-                    import os
-                    db_path = os.getenv('LANCEDB_PATH') or './rag_system/index_store/lancedb'
+                    db_path = settings.lancedb_path
                     ldb = LanceDBManager(db_path)
                     db = ldb.db
                     if hasattr(db, 'table_names') and vector_table_name in db.table_names():
@@ -466,11 +465,11 @@ class ChatDatabase:
             try:
                 # Try to import the RAG system modules
                 try:
+                    from rag_system.config import settings
                     from rag_system.indexing.embedders import LanceDBManager
-                    import os
                     
                     # Use the same path as the system
-                    db_path = os.getenv('LANCEDB_PATH') or './rag_system/index_store/lancedb'
+                    db_path = settings.lancedb_path
                     ldb = LanceDBManager(db_path)
                     
                     # Check if table exists

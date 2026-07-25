@@ -1,11 +1,12 @@
-import json
 import http.server
-import socketserver
-from urllib.parse import urlparse, parse_qs
-import os
-import requests
-import sys
+import json
 import logging
+import os
+import socketserver
+import sys
+from urllib.parse import urlparse
+
+import requests
 
 # Add backend directory to path for database imports
 backend_dir = os.path.join(os.path.dirname(__file__), '..', 'backend')
@@ -13,16 +14,17 @@ if backend_dir not in sys.path:
     sys.path.append(backend_dir)
 
 from backend.database import ChatDatabase, generate_session_title
-from rag_system.main import get_agent
+from rag_system.config import settings
 from rag_system.factory import get_indexing_pipeline
+from rag_system.main import get_agent
 
 # Initialize database connection once at module level
 # Use auto-detection for environment-appropriate path
 db = ChatDatabase()
 
-# Get the desired agent mode from environment variables, defaulting to 'default'
+# Get the desired agent mode - now sourced from validated settings
 # This allows us to easily switch between 'default', 'fast', 'react', etc.
-AGENT_MODE = os.getenv("RAG_CONFIG_MODE", "default")
+AGENT_MODE = settings.rag_config_mode
 RAG_AGENT = get_agent(AGENT_MODE)
 INDEXING_PIPELINE = get_indexing_pipeline(AGENT_MODE)
 
@@ -388,7 +390,7 @@ class AdvancedRagApiHandler(http.server.BaseHTTPRequestHandler):
                 """Send a single SSE event."""
                 try:
                     data_str = json.dumps({"type": event_type, "data": payload})
-                    self.wfile.write(f"data: {data_str}\n\n".encode('utf-8'))
+                    self.wfile.write(f"data: {data_str}\n\n".encode())
                     self.wfile.flush()
                 except BrokenPipeError:
                     # Client disconnected

@@ -1,15 +1,17 @@
-from typing import List, Dict, Any, Protocol
-import numpy as np
-from transformers import AutoModel, AutoTokenizer
-import torch
-import os
 import logging
+from typing import Any, Protocol
+
+import numpy as np
+import torch
+from transformers import AutoModel, AutoTokenizer
+
+from rag_system.config import settings
 
 logger = logging.getLogger(__name__)
 
 # We keep the protocol to ensure a consistent interface
 class EmbeddingModel(Protocol):
-    def create_embeddings(self, texts: List[str]) -> np.ndarray: ...
+    def create_embeddings(self, texts: list[str]) -> np.ndarray: ...
 
 # Global cache for models - use dict to cache by model name
 _MODEL_CACHE = {}
@@ -45,7 +47,7 @@ class QwenEmbedder(EmbeddingModel):
         
         self.tokenizer, self.model = _MODEL_CACHE[model_name]
 
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
+    def create_embeddings(self, texts: list[str]) -> np.ndarray:
         logger.info(f"Generating {len(texts)} embeddings with {self.model_name} model...")
         inputs = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(self.device)
         with torch.no_grad():
@@ -64,13 +66,13 @@ class QwenEmbedder(EmbeddingModel):
             logger.warning(f"⚠️ Warning: NaN values detected in embeddings from {self.model_name}")
             # Replace NaN values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            logger.info(f"🔄 Replaced NaN values with zeros")
+            logger.info("🔄 Replaced NaN values with zeros")
         
         if np.isinf(embeddings_np).any():
             logger.warning(f"⚠️ Warning: Infinite values detected in embeddings from {self.model_name}")
             # Replace infinite values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            logger.info(f"🔄 Replaced infinite values with zeros")
+            logger.info("🔄 Replaced infinite values with zeros")
         
         return embeddings_np
 
@@ -79,7 +81,7 @@ class EmbeddingGenerator:
         self.model = embedding_model
         self.batch_size = batch_size
 
-    def generate(self, chunks: List[Dict[str, Any]]) -> List[np.ndarray]:
+    def generate(self, chunks: list[dict[str, Any]]) -> list[np.ndarray]:
         """Generate embeddings for all chunks using batch processing"""
         texts_to_embed = [chunk['text'] for chunk in chunks]
         if not texts_to_embed: 
@@ -110,11 +112,13 @@ class OllamaEmbedder(EmbeddingModel):
     """Call Ollama's /api/embeddings endpoint for each text."""
     def __init__(self, model_name: str, host: str | None = None, timeout: int = 60):
         self.model_name = model_name
-        self.host = (host or os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
+        self.host = (host or settings.ollama_host).rstrip("/")
         self.timeout = timeout
 
     def _embed_single(self, text: str):
-        import requests, numpy as np, json
+
+        import numpy as np
+        import requests
         payload = {"model": self.model_name, "prompt": text}
         r = requests.post(f"{self.host}/api/embeddings", json=payload, timeout=self.timeout)
         r.raise_for_status()
@@ -125,7 +129,7 @@ class OllamaEmbedder(EmbeddingModel):
             raise ValueError("Unexpected Ollama embeddings response format")
         return np.array(vec, dtype="float32")
 
-    def create_embeddings(self, texts: List[str]):
+    def create_embeddings(self, texts: list[str]):
         import numpy as np
         vectors = [self._embed_single(t) for t in texts]
         embeddings_np = np.vstack(vectors)
@@ -135,13 +139,13 @@ class OllamaEmbedder(EmbeddingModel):
             logger.warning(f"⚠️ Warning: NaN values detected in Ollama embeddings from {self.model_name}")
             # Replace NaN values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            logger.info(f"🔄 Replaced NaN values with zeros")
+            logger.info("🔄 Replaced NaN values with zeros")
         
         if np.isinf(embeddings_np).any():
             logger.warning(f"⚠️ Warning: Infinite values detected in Ollama embeddings from {self.model_name}")
             # Replace infinite values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            logger.info(f"🔄 Replaced infinite values with zeros")
+            logger.info("🔄 Replaced infinite values with zeros")
         
         return embeddings_np
 

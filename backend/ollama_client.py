@@ -1,15 +1,16 @@
-import requests
 import json
-import os
-from typing import List, Dict, Optional
 import logging
+
+import requests
+
+from rag_system.config import settings
 
 logger = logging.getLogger(__name__)
 
 class OllamaClient:
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: str | None = None):
         if base_url is None:
-            base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            base_url = settings.ollama_host
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
     
@@ -21,7 +22,7 @@ class OllamaClient:
         except requests.exceptions.RequestException:
             return False
     
-    def list_models(self) -> List[str]:
+    def list_models(self) -> list[str]:
         """Get list of available models"""
         try:
             response = requests.get(f"{self.api_url}/tags")
@@ -57,7 +58,7 @@ class OllamaClient:
             logger.error(f"Error pulling model: {e}")
             return False
     
-    def chat(self, message: str, model: str = "llama3.2", conversation_history: List[Dict] = None, enable_thinking: bool = True) -> str:
+    def chat(self, message: str, model: str = "llama3.2", conversation_history: list[dict] = None, enable_thinking: bool = True) -> str:
         """Send a chat message to Ollama"""
         if conversation_history is None:
             conversation_history = []
@@ -111,7 +112,7 @@ class OllamaClient:
         except requests.exceptions.RequestException as e:
             return f"Connection error: {e}"
     
-    def chat_stream(self, message: str, model: str = "llama3.2", conversation_history: List[Dict] = None, enable_thinking: bool = True):
+    def chat_stream(self, message: str, model: str = "llama3.2", conversation_history: list[dict] = None, enable_thinking: bool = True):
         """Stream chat response from Ollama"""
         if conversation_history is None:
             conversation_history = []
