@@ -15,6 +15,9 @@ unaffected.
 
 from threading import Lock
 from typing import List, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SentencePruner:
@@ -41,15 +44,15 @@ class SentencePruner:
             try:
                 from transformers import AutoModel  # local import to keep base deps light
 
-                print("🔧 Loading Provence sentence-pruning model …")
+                logger.info("🔧 Loading Provence sentence-pruning model …")
                 SentencePruner._model = AutoModel.from_pretrained(
                     self.model_name,
                     trust_remote_code=True,
                 )
-                print("✅ Provence model loaded successfully.")
+                logger.info("✅ Provence model loaded successfully.")
             except Exception as e:
                 # Any failure leaves the singleton as None so callers can skip pruning.
-                print(f"❌ Failed to load Provence model: {e}. Context pruning will be skipped.")
+                logger.error(f"❌ Failed to load Provence model: {e}. Context pruning will be skipped.")
                 SentencePruner._model = None
 
     # ------------------------------------------------------------------
@@ -84,7 +87,7 @@ class SentencePruner:
                 if isinstance(outputs, dict):
                     outputs = [outputs]
                 if len(outputs) != len(texts):
-                    print("⚠️ Provence batch size mismatch; falling back to per-doc loop")
+                    logger.warning("⚠️ Provence batch size mismatch; falling back to per-doc loop")
                     raise ValueError
 
             pruned: List[Dict[str, Any]] = []
@@ -93,7 +96,7 @@ class SentencePruner:
                 new_text = raw if isinstance(raw, str) else " ".join(raw)  # HF model may return a list of sentences
                 pruned.append({**doc, "text": new_text})
         except Exception as e:
-            print(f"⚠️ Provence batch pruning failed ({e}); falling back to individual calls")
+            logger.error(f"⚠️ Provence batch pruning failed ({e}); falling back to individual calls")
             pruned = []
             for doc in docs:
                 text = doc.get("text", "")
@@ -106,7 +109,7 @@ class SentencePruner:
                     new_text = raw if isinstance(raw, str) else " ".join(raw)
                     pruned.append({**doc, "text": new_text})
                 except Exception as err:
-                    print(f"⚠️ Provence pruning failed for chunk {doc.get('chunk_id')}: {err}")
+                    logger.error(f"⚠️ Provence pruning failed for chunk {doc.get('chunk_id')}: {err}")
                     pruned.append(doc)
 
         return pruned 

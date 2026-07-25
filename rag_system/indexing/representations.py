@@ -3,6 +3,9 @@ import numpy as np
 from transformers import AutoModel, AutoTokenizer
 import torch
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # We keep the protocol to ensure a consistent interface
 class EmbeddingModel(Protocol):
@@ -28,7 +31,7 @@ class QwenEmbedder(EmbeddingModel):
 
         # Use model-specific cache
         if model_name not in _MODEL_CACHE:
-            print(f"Initializing HF Embedder with model '{model_name}' on device '{self.device}'. (first load)")
+            logger.info(f"Initializing HF Embedder with model '{model_name}' on device '{self.device}'. (first load)")
             tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, padding_side="left")
             model = AutoModel.from_pretrained(
                 model_name,
@@ -36,14 +39,14 @@ class QwenEmbedder(EmbeddingModel):
                 torch_dtype=torch.float16 if self.device != "cpu" else None,
             ).to(self.device).eval()
             _MODEL_CACHE[model_name] = (tokenizer, model)
-            print(f"QwenEmbedder weights loaded and cached for {model_name}.")
+            logger.info(f"QwenEmbedder weights loaded and cached for {model_name}.")
         else:
-            print(f"Reusing cached QwenEmbedder weights for {model_name}.")
+            logger.info(f"Reusing cached QwenEmbedder weights for {model_name}.")
         
         self.tokenizer, self.model = _MODEL_CACHE[model_name]
 
     def create_embeddings(self, texts: List[str]) -> np.ndarray:
-        print(f"Generating {len(texts)} embeddings with {self.model_name} model...")
+        logger.info(f"Generating {len(texts)} embeddings with {self.model_name} model...")
         inputs = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(self.device)
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -58,16 +61,16 @@ class QwenEmbedder(EmbeddingModel):
         
         # Check for NaN or infinite values
         if np.isnan(embeddings_np).any():
-            print(f"⚠️ Warning: NaN values detected in embeddings from {self.model_name}")
+            logger.warning(f"⚠️ Warning: NaN values detected in embeddings from {self.model_name}")
             # Replace NaN values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            print(f"🔄 Replaced NaN values with zeros")
+            logger.info(f"🔄 Replaced NaN values with zeros")
         
         if np.isinf(embeddings_np).any():
-            print(f"⚠️ Warning: Infinite values detected in embeddings from {self.model_name}")
+            logger.warning(f"⚠️ Warning: Infinite values detected in embeddings from {self.model_name}")
             # Replace infinite values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            print(f"🔄 Replaced infinite values with zeros")
+            logger.info(f"🔄 Replaced infinite values with zeros")
         
         return embeddings_np
 
@@ -85,7 +88,7 @@ class EmbeddingGenerator:
         from rag_system.utils.batch_processor import BatchProcessor, estimate_memory_usage
         
         memory_mb = estimate_memory_usage(chunks)
-        print(f"Estimated memory usage for {len(chunks)} chunks: {memory_mb:.1f}MB")
+        logger.info(f"Estimated memory usage for {len(chunks)} chunks: {memory_mb:.1f}MB")
         
         batch_processor = BatchProcessor(batch_size=self.batch_size)
         
@@ -129,16 +132,16 @@ class OllamaEmbedder(EmbeddingModel):
         
         # Check for NaN or infinite values
         if np.isnan(embeddings_np).any():
-            print(f"⚠️ Warning: NaN values detected in Ollama embeddings from {self.model_name}")
+            logger.warning(f"⚠️ Warning: NaN values detected in Ollama embeddings from {self.model_name}")
             # Replace NaN values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            print(f"🔄 Replaced NaN values with zeros")
+            logger.info(f"🔄 Replaced NaN values with zeros")
         
         if np.isinf(embeddings_np).any():
-            print(f"⚠️ Warning: Infinite values detected in Ollama embeddings from {self.model_name}")
+            logger.warning(f"⚠️ Warning: Infinite values detected in Ollama embeddings from {self.model_name}")
             # Replace infinite values with zeros
             embeddings_np = np.nan_to_num(embeddings_np, nan=0.0, posinf=0.0, neginf=0.0)
-            print(f"🔄 Replaced infinite values with zeros")
+            logger.info(f"🔄 Replaced infinite values with zeros")
         
         return embeddings_np
 
@@ -151,7 +154,7 @@ def select_embedder(model_name: str, ollama_host: str | None = None):
     return OllamaEmbedder(model_name=model_name, host=ollama_host)
 
 if __name__ == '__main__':
-    print("representations.py cleaned up.")
+    logger.info("representations.py cleaned up.")
     try:
         qwen_embedder = QwenEmbedder()
         emb_gen = EmbeddingGenerator(embedding_model=qwen_embedder)
@@ -159,9 +162,9 @@ if __name__ == '__main__':
         sample_chunks = [{'text': 'Hello world'}, {'text': 'This is a test'}]
         embeddings = emb_gen.generate(sample_chunks)
         
-        print(f"\nSuccessfully generated {len(embeddings)} embeddings.")
-        print(f"Shape of first embedding: {embeddings[0].shape}")
+        logger.info(f"\nSuccessfully generated {len(embeddings)} embeddings.")
+        logger.info(f"Shape of first embedding: {embeddings[0].shape}")
 
     except Exception as e:
-        print(f"\nAn error occurred during the QwenEmbedder test: {e}")
-        print("Please ensure you have an internet connection for model downloads.")
+        logger.error(f"\nAn error occurred during the QwenEmbedder test: {e}")
+        logger.info("Please ensure you have an internet connection for model downloads.")

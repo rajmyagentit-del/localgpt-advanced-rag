@@ -29,7 +29,7 @@ class GraphRetriever:
         self.graph = nx.read_gml(graph_path)
 
     def retrieve(self, query: str, k: int = 5, score_cutoff: int = 80) -> List[Dict[str, Any]]:
-        print(f"\n--- Performing Graph Retrieval for query: '{query}' ---")
+        logger.info(f"\n--- Performing Graph Retrieval for query: '{query}' ---")
         
         query_parts = query.split()
         entities = []
@@ -48,7 +48,7 @@ class GraphRetriever:
                     'metadata': {'source': 'graph'}
                 })
         
-        print(f"Retrieved {len(retrieved_docs)} documents from the graph.")
+        logger.info(f"Retrieved {len(retrieved_docs)} documents from the graph.")
         return retrieved_docs[:k]
 
 # region === MultiVectorRetriever ===
@@ -75,7 +75,7 @@ class MultiVectorRetriever:
         If a reranker is provided, it performs a hybrid search.
         Otherwise, it performs a standard vector search.
         """
-        print(f"\n--- Performing Retrieval for query: '{text_query}' on table '{table_name}' ---")
+        logger.info(f"\n--- Performing Retrieval for query: '{text_query}' on table '{table_name}' ---")
         
         try:
             if table_name is None:
@@ -188,13 +188,13 @@ class MultiVectorRetriever:
 
             logger.debug("Hybrid search returned %s results", len(retrieved_docs))
             log_retrieval_results(retrieved_docs, k)
-            print(f"Retrieved {len(retrieved_docs)} documents.")
+            logger.info(f"Retrieved {len(retrieved_docs)} documents.")
             return retrieved_docs
         
         except Exception as e:
-            print(f"Could not search table '{table_name}': {e}")
+            logger.warning(f"Could not search table '{table_name}': {e}")
             return []
 # endregion
 
 if __name__ == '__main__':
-    print("retrievers.py updated for LanceDB FTS Hybrid Search.")
+    logger.info("retrievers.py updated for LanceDB FTS Hybrid Search.")

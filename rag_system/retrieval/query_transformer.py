@@ -1,6 +1,9 @@
 from typing import List, Any, Dict
 import json
 from rag_system.utils.ollama_client import OllamaClient
+import logging
+
+logger = logging.getLogger(__name__)
 
 class QueryDecomposer:
     def __init__(self, llm_client: OllamaClient, llm_model: str):
@@ -276,7 +279,7 @@ Input payload:
             sub_queries = data.get('sub_queries') or [query]
             reasoning = data.get('reasoning', 'No reasoning provided.')
 
-            print(f"Query Decomposition Reasoning: {reasoning}")
+            logger.info(f"Query Decomposition Reasoning: {reasoning}")
 
             # Fallback: ensure at least the resolved_query if sub_queries empty
             if not sub_queries:
@@ -288,7 +291,7 @@ Input payload:
             # Enforce 10 sub-query limit per new requirements
             return sub_queries[:10]
         except json.JSONDecodeError:
-            print(f"Failed to decode JSON from query decomposer: {response_text}")
+            logger.error(f"Failed to decode JSON from query decomposer: {response_text}")
             return [query]
 
 class HyDEGenerator:

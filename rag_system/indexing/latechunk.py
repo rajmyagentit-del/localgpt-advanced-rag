@@ -17,6 +17,9 @@ from typing import List, Tuple
 import torch
 from transformers import AutoModel, AutoTokenizer
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 class LateChunkEncoder:
     """Generate late-chunked embeddings given character-offset spans."""
@@ -79,10 +82,10 @@ class LateChunkEncoder:
             
             # Check for NaN or infinite values
             if np.isnan(chunk_vec).any() or np.isinf(chunk_vec).any():
-                print(f"⚠️ Warning: Invalid values detected in late chunk embedding for span ({start_char}, {end_char})")
+                logger.warning(f"⚠️ Warning: Invalid values detected in late chunk embedding for span ({start_char}, {end_char})")
                 # Replace invalid values with zeros
                 chunk_vec = np.nan_to_num(chunk_vec, nan=0.0, posinf=0.0, neginf=0.0)
-                print(f"🔄 Replaced invalid values with zeros")
+                logger.info(f"🔄 Replaced invalid values with zeros")
             
             vectors.append(chunk_vec)
         return vectors 

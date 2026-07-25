@@ -4,6 +4,9 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions, OcrMacOptions
 from docling.datamodel.base_models import InputFormat
 import fitz  # PyMuPDF for quick text inspection
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class DocumentConverter:
     """
@@ -44,9 +47,9 @@ class DocumentConverter:
             
             self.converter_general = DoclingConverter()
 
-            print("docling DocumentConverter(s) initialized (OCR + no-OCR + general).")
+            logger.info("docling DocumentConverter(s) initialized (OCR + no-OCR + general).")
         except Exception as e:
-            print(f"Error initializing docling DocumentConverter(s): {e}")
+            logger.error(f"Error initializing docling DocumentConverter(s): {e}")
             self.converter_no_ocr = None
             self.converter_ocr = None
             self.converter_general = None
@@ -57,12 +60,12 @@ class DocumentConverter:
         Supports PDF, DOCX, HTML, and other formats.
         """
         if not (self.converter_no_ocr and self.converter_ocr and self.converter_general):
-            print("docling converters not available. Skipping conversion.")
+            logger.warning("docling converters not available. Skipping conversion.")
             return []
         
         file_ext = os.path.splitext(file_path)[1].lower()
         if file_ext not in self.SUPPORTED_FORMATS:
-            print(f"Unsupported file format: {file_ext}")
+            logger.info(f"Unsupported file format: {file_ext}")
             return []
         
         input_format = self.SUPPORTED_FORMATS[file_ext]
@@ -91,12 +94,12 @@ class DocumentConverter:
         converter = self.converter_ocr if use_ocr else self.converter_no_ocr
         ocr_msg = "(OCR enabled)" if use_ocr else "(no OCR)"
 
-        print(f"Converting {pdf_path} to Markdown using docling {ocr_msg}...")
+        logger.info(f"Converting {pdf_path} to Markdown using docling {ocr_msg}...")
         return self._perform_conversion(pdf_path, converter, ocr_msg)
     
     def _convert_txt_to_markdown(self, file_path: str) -> List[Tuple[str, Dict[str, Any]]]:
         """Convert plain text files to markdown by reading content directly."""
-        print(f"Converting {file_path} (TXT) to Markdown...")
+        logger.info(f"Converting {file_path} (TXT) to Markdown...")
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -104,15 +107,15 @@ class DocumentConverter:
             markdown_content = f"```\n{content}\n```"
             metadata = {"source": file_path}
             
-            print(f"Successfully converted {file_path} (TXT) to Markdown.")
+            logger.info(f"Successfully converted {file_path} (TXT) to Markdown.")
             return [(markdown_content, metadata)]
         except Exception as e:
-            print(f"Error processing TXT file {file_path}: {e}")
+            logger.error(f"Error processing TXT file {file_path}: {e}")
             return []
     
     def _convert_general_to_markdown(self, file_path: str, input_format: InputFormat) -> List[Tuple[str, Dict[str, Any]]]:
         """Convert non-PDF formats using general converter."""
-        print(f"Converting {file_path} ({input_format.name}) to Markdown using docling...")
+        logger.info(f"Converting {file_path} ({input_format.name}) to Markdown using docling...")
         return self._perform_conversion(file_path, self.converter_general, f"({input_format.name})")
     
     def _perform_conversion(self, file_path: str, converter, format_msg: str) -> List[Tuple[str, Dict[str, Any]]]:
@@ -127,8 +130,8 @@ class DocumentConverter:
             # chunkers that understand the element tree can use it.  Legacy callers that
             # expect only (markdown, metadata) can simply ignore the extra value.
             pages_data.append((markdown_content, metadata, result.document))
-            print(f"Successfully converted {file_path} with docling {format_msg}.")
+            logger.info(f"Successfully converted {file_path} with docling {format_msg}.")
             return pages_data
         except Exception as e:
-            print(f"Error processing {file_path} with docling: {e}")
+            logger.error(f"Error processing {file_path} with docling: {e}")
             return []

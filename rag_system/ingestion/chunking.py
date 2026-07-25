@@ -1,6 +1,9 @@
 from typing import List, Dict, Any, Optional
 import re
 from transformers import AutoTokenizer
+import logging
+
+logger = logging.getLogger(__name__)
 
 class MarkdownRecursiveChunker:
     """
@@ -22,8 +25,8 @@ class MarkdownRecursiveChunker:
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
         except Exception as e:
-            print(f"Warning: Failed to load tokenizer {repo_id}: {e}")
-            print("Falling back to character-based approximation (4 chars ≈ 1 token)")
+            logger.error(f"Warning: Failed to load tokenizer {repo_id}: {e}")
+            logger.warning("Falling back to character-based approximation (4 chars ≈ 1 token)")
             self.tokenizer = None
 
     def _token_len(self, text: str) -> int:
@@ -134,7 +137,7 @@ def create_contextual_window(all_chunks: List[Dict[str, Any]], chunk_index: int,
     return " ".join([chunk['text'] for chunk in context_chunks])
 
 if __name__ == '__main__':
-    print("chunking.py updated to include document metadata in each chunk.")
+    logger.info("chunking.py updated to include document metadata in each chunk.")
     
     sample_markdown = "# Doc Title\n\nContent paragraph."
     doc_meta = {"title": "My Awesome Document", "author": "Jane Doe", "year": 2024}
@@ -146,9 +149,9 @@ if __name__ == '__main__':
         document_metadata=doc_meta
     )
     
-    print(f"\n--- Created {len(chunks)} chunk(s) ---")
+    logger.info(f"\n--- Created {len(chunks)} chunk(s) ---")
     for chunk in chunks:
-        print(f"Chunk ID: {chunk['chunk_id']}")
-        print(f"Text: '{chunk['text']}'")
-        print(f"Metadata: {chunk['metadata']}")
-        print("-" * 20)
+        logger.info(f"Chunk ID: {chunk['chunk_id']}")
+        logger.info(f"Text: '{chunk['text']}'")
+        logger.info(f"Metadata: {chunk['metadata']}")
+        logger.info("-" * 20)

@@ -1,6 +1,9 @@
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import torch
 from typing import List, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 class QwenReranker:
     """
@@ -14,14 +17,14 @@ class QwenReranker:
             self.device = "mps"
         else:
             self.device = "cpu"
-        print(f"Initializing BGE Reranker with model '{model_name}' on device '{self.device}'.")
+        logger.info(f"Initializing BGE Reranker with model '{model_name}' on device '{self.device}'.")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             torch_dtype=torch.float16 if self.device != "cpu" else None,
         ).to(self.device).eval()
         
-        print("BGE Reranker loaded successfully.")
+        logger.info("BGE Reranker loaded successfully.")
 
     def _format_instruction(self, query: str, doc: str):
         instruction = 'Given a web search query, retrieve relevant passages that answer the query'
@@ -94,12 +97,12 @@ if __name__ == '__main__':
         
         reranked_documents = reranker.rerank(query, documents)
         
-        print("\n--- Verification ---")
-        print(f"Query: {query}")
-        print("Reranked documents:")
+        logger.info("\n--- Verification ---")
+        logger.info(f"Query: {query}")
+        logger.info("Reranked documents:")
         for doc in reranked_documents:
-            print(f"  - Score: {doc['rerank_score']:.4f}, Text: {doc['text']}")
+            logger.info(f"  - Score: {doc['rerank_score']:.4f}, Text: {doc['text']}")
 
     except Exception as e:
-        print(f"\nAn error occurred during the QwenReranker test: {e}")
-        print("Please ensure you have an internet connection for model downloads.")
+        logger.error(f"\nAn error occurred during the QwenReranker test: {e}")
+        logger.info("Please ensure you have an internet connection for model downloads.")

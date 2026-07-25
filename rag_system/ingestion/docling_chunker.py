@@ -15,6 +15,9 @@ import re
 from itertools import islice
 from rag_system.ingestion.chunking import MarkdownRecursiveChunker
 from transformers import AutoTokenizer
+import logging
+
+logger = logging.getLogger(__name__)
 
 class DoclingChunker:
     def __init__(self, *, max_tokens: int = 512, overlap: int = 1, tokenizer_model: str = "Qwen/Qwen3-Embedding-0.6B"):
@@ -29,8 +32,8 @@ class DoclingChunker:
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
         except Exception as e:
-            print(f"Warning: Failed to load tokenizer {repo_id}: {e}")
-            print("Falling back to character-based approximation (4 chars ≈ 1 token)")
+            logger.error(f"Warning: Failed to load tokenizer {repo_id}: {e}")
+            logger.warning("Falling back to character-based approximation (4 chars ≈ 1 token)")
             self.tokenizer = None
         # Fallback simple sentence splitter (period, question, exclamation, newline)
         self._sent_re = re.compile(r"(?<=[\.\!\?])\s+|\n+")
@@ -193,7 +196,7 @@ class DoclingChunker:
                     tbl_md = tbl.export_to_markdown() if hasattr(tbl, "export_to_markdown") else str(tbl)
                 _add_chunk(tbl_md, "table", heading_path=current_heading_path[:], page_no=getattr(tbl, "page_no", None))
         except Exception as e:
-            print(f"⚠️  Docling tree walk failed: {e}. Falling back to markdown splitter.")
+            logger.error(f"⚠️  Docling tree walk failed: {e}. Falling back to markdown splitter.")
             return self.split_markdown(doc.export_to_markdown(), document_id=document_id, metadata=metadata)
 
         # --------------------------------------------------------------

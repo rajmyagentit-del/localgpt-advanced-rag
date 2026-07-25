@@ -4,18 +4,21 @@ import pyarrow as pa
 from typing import List, Dict, Any
 import numpy as np
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 class LanceDBManager:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.db = lancedb.connect(db_path)
-        print(f"LanceDB connection established at: {db_path}")
+        logger.info(f"LanceDB connection established at: {db_path}")
 
     def get_table(self, table_name: str):
         return self.db.open_table(table_name)
 
     def create_table(self, table_name: str, schema: pa.Schema, mode: str = "overwrite"):
-        print(f"Creating table '{table_name}' with mode '{mode}'...")
+        logger.info(f"Creating table '{table_name}' with mode '{mode}'...")
         return self.db.create_table(table_name, schema=schema, mode=mode)
 
 class VectorIndexer:
@@ -31,7 +34,7 @@ class VectorIndexer:
         if len(chunks) != len(embeddings):
             raise ValueError("The number of chunks and embeddings must be the same.")
         if not chunks:
-            print("No chunks to index.")
+            logger.info("No chunks to index.")
             return
 
         vector_dim = embeddings[0].shape[0]
@@ -53,13 +56,13 @@ class VectorIndexer:
         for chunk, vector in zip(chunks, embeddings):
             # Check for NaN values in the vector
             if np.isnan(vector).any():
-                print(f"⚠️ Skipping chunk '{chunk.get('chunk_id', 'unknown')}' due to NaN values in embedding")
+                logger.warning(f"⚠️ Skipping chunk '{chunk.get('chunk_id', 'unknown')}' due to NaN values in embedding")
                 skipped_count += 1
                 continue
                 
             # Check for infinite values in the vector
             if np.isinf(vector).any():
-                print(f"⚠️ Skipping chunk '{chunk.get('chunk_id', 'unknown')}' due to infinite values in embedding")
+                logger.warning(f"⚠️ Skipping chunk '{chunk.get('chunk_id', 'unknown')}' due to infinite values in embedding")
                 skipped_count += 1
                 continue
             
@@ -86,10 +89,10 @@ class VectorIndexer:
             })
 
         if skipped_count > 0:
-            print(f"⚠️ Skipped {skipped_count} chunks due to invalid embeddings (NaN or infinite values)")
+            logger.warning(f"⚠️ Skipped {skipped_count} chunks due to invalid embeddings (NaN or infinite values)")
         
         if not data:
-            print("❌ No valid embeddings to index after filtering out NaN/infinite values")
+            logger.error("❌ No valid embeddings to index after filtering out NaN/infinite values")
             return
 
         # Incremental indexing: append to existing table if present, otherwise create it
@@ -97,24 +100,24 @@ class VectorIndexer:
 
         if hasattr(db, "table_names") and table_name in db.table_names():
             tbl = self.db_manager.get_table(table_name)
-            print(f"Appending {len(data)} vectors to existing table '{table_name}'.")
+            logger.info(f"Appending {len(data)} vectors to existing table '{table_name}'.")
         else:
-            print(f"Creating table '{table_name}' (new) and adding {len(data)} vectors...")
+            logger.info(f"Creating table '{table_name}' (new) and adding {len(data)} vectors...")
             tbl = self.db_manager.create_table(table_name, schema=schema, mode="create")
 
         # Add data with NaN handling configuration
         try:
             tbl.add(data, on_bad_vectors='drop')
-            print(f"✅ Indexed {len(data)} vectors into table '{table_name}'.")
+            logger.info(f"✅ Indexed {len(data)} vectors into table '{table_name}'.")
         except Exception as e:
-            print(f"❌ Failed to add data to table: {e}")
+            logger.error(f"❌ Failed to add data to table: {e}")
             # Fallback: try with fill strategy
             try:
-                print("🔄 Retrying with NaN fill strategy...")
+                logger.info("🔄 Retrying with NaN fill strategy...")
                 tbl.add(data, on_bad_vectors='fill', fill_value=0.0)
-                print(f"✅ Indexed {len(data)} vectors into table '{table_name}' (with NaN fill).")
+                logger.info(f"✅ Indexed {len(data)} vectors into table '{table_name}' (with NaN fill).")
             except Exception as e2:
-                print(f"❌ Failed to add data even with NaN fill: {e2}")
+                logger.error(f"❌ Failed to add data even with NaN fill: {e2}")
                 raise
 
 # BM25Indexer is no longer needed as we are moving to LanceDB's native FTS.
@@ -122,7 +125,7 @@ class VectorIndexer:
 #     ...
 
 if __name__ == '__main__':
-    print("embedders.py updated for contextual enrichment.")
+    logger.info("embedders.py updated for contextual enrichment.")
     
     # This chunk has been "enriched". The 'text' field contains the context.
     enriched_chunk = {
@@ -151,8 +154,8 @@ if __name__ == '__main__':
         tbl = db_manager.get_table("enriched_text_embeddings")
         df = tbl.limit(1).to_pandas()
         df['metadata'] = df['metadata'].apply(json.loads)
-        print("\n--- Verification ---")
-        print("Embedded Text:", df['text'].iloc[0])
-        print("Original Text from Metadata:", df['metadata'].iloc[0]['original_text'])
+        logger.info("\n--- Verification ---")
+        logger.info("Embedded Text:", df['text'].iloc[0])
+        logger.info("Original Text from Metadata:", df['metadata'].iloc[0]['original_text'])
     except Exception as e:
-        print(f"Could not verify LanceDB table. Error: {e}")
+        logger.error(f"Could not verify LanceDB table. Error: {e}")

@@ -9,19 +9,22 @@ from rag_system.indexing.representations import QwenEmbedder
 
 
 from transformers import ColPaliForRetrieval, ColPaliProcessor, Qwen2TokenizerFast
+import logging
+
+logger = logging.getLogger(__name__)
 
 class LocalVisionModel:
     """
     A wrapper for a local vision model (ColPali) from the transformers library.
     """
     def __init__(self, model_name: str = "vidore/colqwen2-v1.0", device: str = "cpu"):
-        print(f"Initializing local vision model '{model_name}' on device '{device}'.")
+        logger.info(f"Initializing local vision model '{model_name}' on device '{device}'.")
         self.device = device
         self.model = ColPaliForRetrieval.from_pretrained(model_name).to(self.device).eval()
         self.tokenizer = Qwen2TokenizerFast.from_pretrained(model_name)
         self.image_processor = ColPaliProcessor.from_pretrained(model_name).image_processor
         self.processor = ColPaliProcessor(tokenizer=self.tokenizer, image_processor=self.image_processor)
-        print("Local vision model loaded successfully.")
+        logger.info("Local vision model loaded successfully.")
 
     def embed_image(self, image: Image.Image) -> torch.Tensor:
         """
@@ -49,7 +52,7 @@ class MultimodalProcessor:
         text_table_name: str, 
         image_table_name: str
     ):
-        print(f"\n--- Processing PDF for multimodal indexing: {os.path.basename(pdf_path)} ---")
+        logger.info(f"\n--- Processing PDF for multimodal indexing: {os.path.basename(pdf_path)} ---")
         doc = fitz.open(pdf_path)
         document_id = os.path.basename(pdf_path)
         
@@ -80,14 +83,14 @@ class MultimodalProcessor:
         if all_pages_text_chunks:
             text_embeddings = self.text_embedder.create_embeddings([c['text'] for c in all_pages_text_chunks])
             self.text_vector_indexer.index(text_table_name, all_pages_text_chunks, text_embeddings)
-            print(f"Indexed {len(all_pages_text_chunks)} text pages into '{text_table_name}'.")
+            logger.info(f"Indexed {len(all_pages_text_chunks)} text pages into '{text_table_name}'.")
 
         # Index all images
         if all_pages_images:
             image_embeddings = self.vision_model.create_image_embeddings(all_pages_images)
             # We use the text chunks as placeholders for metadata
             self.image_vector_indexer.index(image_table_name, all_pages_text_chunks, image_embeddings)
-            print(f"Indexed {len(all_pages_images)} image pages into '{image_table_name}'.")
+            logger.info(f"Indexed {len(all_pages_images)} image pages into '{image_table_name}'.")
 
 if __name__ == '__main__':
     # This test requires an internet connection to download the models.
@@ -113,12 +116,12 @@ if __name__ == '__main__':
         )
         
         # 4. Verify
-        print("\n--- Verification ---")
+        logger.info("\n--- Verification ---")
         text_tbl = db_manager.get_table("test_text_pages")
         img_tbl = db_manager.get_table("test_image_pages")
-        print(f"Text table has {len(text_tbl)} rows.")
-        print(f"Image table has {len(img_tbl)} rows.")
+        logger.info(f"Text table has {len(text_tbl)} rows.")
+        logger.info(f"Image table has {len(img_tbl)} rows.")
 
     except Exception as e:
-        print(f"\nAn error occurred during the multimodal test: {e}")
-        print("Please ensure you have an internet connection for model downloads.")
+        logger.error(f"\nAn error occurred during the multimodal test: {e}")
+        logger.info("Please ensure you have an internet connection for model downloads.")
