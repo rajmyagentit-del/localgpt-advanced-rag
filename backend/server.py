@@ -1,14 +1,15 @@
-import json
-import http.server
-import socketserver
 import cgi
-import os
-import uuid
+import http.server
+import json
 import logging
-from urllib.parse import urlparse, parse_qs
-import requests  # 🆕 Import requests for making HTTP calls
+import os
+import socketserver
 import sys
+import uuid
 from datetime import datetime
+from urllib.parse import urlparse
+
+import requests  # 🆕 Import requests for making HTTP calls
 
 # Add parent directory to path so we can import rag_system modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,6 +18,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # gets configured (once). See rag_system/utils/logging_utils.py for details
 # on how LOG_LEVEL / LOG_FORMAT env vars control behavior.
 from rag_system.utils.logging_utils import setup_logging
+
 setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -30,12 +32,15 @@ except ImportError as e:
     RAG_SYSTEM_AVAILABLE = False
     logger.warning(f"⚠️ RAG system modules not available: {e}")
 
-from ollama_client import OllamaClient
-from database import db, generate_session_title
-import simple_pdf_processor as pdf_module
-from simple_pdf_processor import initialize_simple_pdf_processor
-from typing import List, Dict, Any
 import re
+from typing import Any
+
+import simple_pdf_processor as pdf_module
+from database import db, generate_session_title
+from validation import is_valid_id, validate_chat_message, MAX_FILE_SIZE_BYTES, MAX_TOTAL_UPLOAD_BYTES
+from rate_limiter import chat_rate_limiter, upload_rate_limiter
+from ollama_client import OllamaClient
+
 
 # 🆕 Reusable TCPServer with address reuse enabled
 class ReusableTCPServer(socketserver.TCPServer):
@@ -54,17 +59,23 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
     
+    def _valid_id_or_400(self, candidate: str) -> str | None:
+        """
+        Validate a session/index ID extracted from the URL path.
+        Sends a 400 response and returns None if it's not a well-formed
+        UUID - callers should check for None and return immediately.
+        """
+        if not is_valid_id(candidate):
+            self.send_json_response({"error": "Invalid or malformed ID in URL"}, status_code=400)
+            return None
+        return candidate
+
     def do_GET(self):
         """Handle GET requests"""
         parsed_path = urlparse(self.path)
         
         if parsed_path.path == '/health':
-            self.send_json_response({
-                "status": "ok",
-                "ollama_running": self.ollama_client.is_ollama_running(),
-                "available_models": self.ollama_client.list_models(),
-                "database_stats": db.get_stats()
-            })
+            self.handle_health_check()
         elif parsed_path.path == '/sessions':
             self.handle_get_sessions()
         elif parsed_path.path == '/sessions/cleanup':
@@ -74,53 +85,106 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         elif parsed_path.path == '/indexes':
             self.handle_get_indexes()
         elif parsed_path.path.startswith('/indexes/') and parsed_path.path.count('/') == 2:
-            index_id = parsed_path.path.split('/')[-1]
+            index_id = self._valid_id_or_400(parsed_path.path.split('/')[-1])
+            if index_id is None:
+                return
             self.handle_get_index(index_id)
         elif parsed_path.path.startswith('/sessions/') and parsed_path.path.endswith('/documents'):
-            session_id = parsed_path.path.split('/')[-2]
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if session_id is None:
+                return
             self.handle_get_session_documents(session_id)
         elif parsed_path.path.startswith('/sessions/') and parsed_path.path.endswith('/indexes'):
-            session_id = parsed_path.path.split('/')[-2]
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if session_id is None:
+                return
             self.handle_get_session_indexes(session_id)
         elif parsed_path.path.startswith('/sessions/') and parsed_path.path.count('/') == 2:
-            session_id = parsed_path.path.split('/')[-1]
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-1])
+            if session_id is None:
+                return
             self.handle_get_session(session_id)
         else:
             self.send_response(404)
             self.end_headers()
     
+    def _rate_limited(self, limiter) -> bool:
+        """
+        Checks the rate limiter for the requesting client's IP. If over
+        the limit, sends a 429 response (with Retry-After) and returns
+        True - callers should check the return value and return
+        immediately if True.
+        """
+        client_ip = self.client_address[0]
+        allowed, retry_after = limiter.is_allowed(client_ip)
+        if not allowed:
+            self.send_response(429)
+            self.send_header('Retry-After', str(retry_after))
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "error": "Rate limit exceeded. Please slow down.",
+                "retry_after_seconds": retry_after,
+            }).encode('utf-8'))
+            return True
+        return False
+
     def do_POST(self):
         """Handle POST requests"""
         parsed_path = urlparse(self.path)
         
         if parsed_path.path == '/chat':
+            if self._rate_limited(chat_rate_limiter):
+                return
             self.handle_chat()
         elif parsed_path.path == '/sessions':
             self.handle_create_session()
         elif parsed_path.path == '/indexes':
             self.handle_create_index()
         elif parsed_path.path.startswith('/indexes/') and parsed_path.path.endswith('/upload'):
-            index_id = parsed_path.path.split('/')[-2]
+            if self._rate_limited(upload_rate_limiter):
+                return
+            index_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if index_id is None:
+                return
             self.handle_index_file_upload(index_id)
         elif parsed_path.path.startswith('/indexes/') and parsed_path.path.endswith('/build'):
-            index_id = parsed_path.path.split('/')[-2]
+            index_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if index_id is None:
+                return
             self.handle_build_index(index_id)
         elif parsed_path.path.startswith('/sessions/') and '/indexes/' in parsed_path.path:
             parts = parsed_path.path.split('/')
-            session_id = parts[2]
-            index_id = parts[4]
+            session_id = self._valid_id_or_400(parts[2])
+            if session_id is None:
+                return
+            index_id = self._valid_id_or_400(parts[4])
+            if index_id is None:
+                return
             self.handle_link_index_to_session(session_id, index_id)
         elif parsed_path.path.startswith('/sessions/') and parsed_path.path.endswith('/messages'):
-            session_id = parsed_path.path.split('/')[-2]
+            if self._rate_limited(chat_rate_limiter):
+                return
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if session_id is None:
+                return
             self.handle_session_chat(session_id)
         elif parsed_path.path.startswith('/sessions/') and parsed_path.path.endswith('/upload'):
-            session_id = parsed_path.path.split('/')[-2]
+            if self._rate_limited(upload_rate_limiter):
+                return
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if session_id is None:
+                return
             self.handle_file_upload(session_id)
         elif parsed_path.path.startswith('/sessions/') and parsed_path.path.endswith('/index'):
-            session_id = parsed_path.path.split('/')[-2]
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if session_id is None:
+                return
             self.handle_index_documents(session_id)
         elif parsed_path.path.startswith('/sessions/') and parsed_path.path.endswith('/rename'):
-            session_id = parsed_path.path.split('/')[-2]
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-2])
+            if session_id is None:
+                return
             self.handle_rename_session(session_id)
         else:
             self.send_response(404)
@@ -131,10 +195,14 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         parsed_path = urlparse(self.path)
         
         if parsed_path.path.startswith('/sessions/') and parsed_path.path.count('/') == 2:
-            session_id = parsed_path.path.split('/')[-1]
+            session_id = self._valid_id_or_400(parsed_path.path.split('/')[-1])
+            if session_id is None:
+                return
             self.handle_delete_session(session_id)
         elif parsed_path.path.startswith('/indexes/') and parsed_path.path.count('/') == 2:
-            index_id = parsed_path.path.split('/')[-1]
+            index_id = self._valid_id_or_400(parsed_path.path.split('/')[-1])
+            if index_id is None:
+                return
             self.handle_delete_index(index_id)
         else:
             self.send_response(404)
@@ -151,10 +219,9 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
             model = data.get('model', 'llama3.2:latest')
             conversation_history = data.get('conversation_history', [])
             
-            if not message:
-                self.send_json_response({
-                    "error": "Message is required"
-                }, status_code=400)
+            is_valid, error = validate_chat_message(message)
+            if not is_valid:
+                self.send_json_response({"error": error}, status_code=400)
                 return
             
             # Check if Ollama is running
@@ -182,6 +249,66 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
                 "error": f"Server error: {str(e)}"
             }, status_code=500)
     
+    def handle_health_check(self):
+        """
+        Real health check: actually verifies each dependency instead of
+        unconditionally returning 200 OK.
+
+        Returns:
+          - 200 if every dependency is healthy
+          - 503 (Service Unavailable) if any REQUIRED dependency is down -
+            this is the status code a load balancer / Kubernetes readiness
+            probe looks at to decide whether to route traffic here.
+
+        Each check is wrapped individually so one failing dependency
+        doesn't crash the whole endpoint or hide the status of the others.
+        """
+        checks = {}
+        overall_healthy = True
+
+        # --- Ollama (required: no LLM generation works without it) ---
+        try:
+            ollama_up = self.ollama_client.is_ollama_running()
+            checks["ollama"] = {
+                "status": "up" if ollama_up else "down",
+                "required": True,
+            }
+            if not ollama_up:
+                overall_healthy = False
+        except Exception as e:
+            checks["ollama"] = {"status": "error", "required": True, "detail": str(e)}
+            overall_healthy = False
+
+        # --- SQLite (required: sessions/chat history depend on it) ---
+        try:
+            stats = db.get_stats()
+            checks["database"] = {"status": "up", "required": True, "stats": stats}
+        except Exception as e:
+            checks["database"] = {"status": "error", "required": True, "detail": str(e)}
+            overall_healthy = False
+
+        # --- LanceDB (required only once at least one index exists;
+        #     treated as informational rather than failing the whole
+        #     health check, since a fresh install has no indexes yet) ---
+        try:
+            import os as _os
+
+            from rag_system.config import settings
+            lancedb_path = settings.lancedb_path
+            checks["lancedb"] = {
+                "status": "up" if _os.path.isdir(lancedb_path) else "not_initialized",
+                "required": False,
+                "path": lancedb_path,
+            }
+        except Exception as e:
+            checks["lancedb"] = {"status": "error", "required": False, "detail": str(e)}
+
+        response_body = {
+            "status": "healthy" if overall_healthy else "unhealthy",
+            "checks": checks,
+        }
+        self.send_json_response(response_body, status_code=200 if overall_healthy else 503)
+
     def handle_get_sessions(self):
         """Get all chat sessions"""
         try:
@@ -293,8 +420,9 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
             data = json.loads(post_data.decode('utf-8'))
             message = data.get('message', '')
 
-            if not message:
-                self.send_json_response({"error": "Message is required"}, status_code=400)
+            is_valid, error = validate_chat_message(message)
+            if not is_valid:
+                self.send_json_response({"error": error}, status_code=400)
                 return
 
             if session['message_count'] == 0:
@@ -345,9 +473,9 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
                     "error": f"Server error: {str(e)}"
                 }, status_code=500)
             except BrokenPipeError:
-                logger.warning(f"⚠️  Client disconnected during error response")
+                logger.warning("⚠️  Client disconnected during error response")
     
-    def _should_use_rag(self, message: str, idx_ids: List[str]) -> bool:
+    def _should_use_rag(self, message: str, idx_ids: list[str]) -> bool:
         """
         🧠 ENHANCED: Determine if a query should use RAG pipeline using document overviews.
         
@@ -373,7 +501,7 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         # Fallback to simple pattern matching if overviews unavailable
         return self._simple_pattern_routing(message, idx_ids)
 
-    def _load_document_overviews(self, idx_ids: List[str]) -> List[str]:
+    def _load_document_overviews(self, idx_ids: list[str]) -> list[str]:
         """Load and aggregate overviews for the given index IDs.
         
         Strategy:
@@ -381,7 +509,8 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         2. Aggregate all overviews found across available files (deduplicated).
         3. If none of the index files exist, fall back to the legacy global overview file.
         """
-        import os, json
+        import json
+        import os
 
         aggregated: list[str] = []
 
@@ -396,7 +525,7 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
                 if os.path.exists(p):
                     logger.debug(f"📖 Loading overviews from: {p}")
                     try:
-                        with open(p, "r", encoding="utf-8") as f:
+                        with open(p, encoding="utf-8") as f:
                             for line in f:
                                 if not line.strip():
                                     continue
@@ -423,7 +552,7 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
                 if os.path.exists(p):
                     logger.warning(f"⚠️ Falling back to legacy overviews file: {p}")
                     try:
-                        with open(p, "r", encoding="utf-8") as f:
+                        with open(p, encoding="utf-8") as f:
                             for line in f:
                                 if not line.strip():
                                     continue
@@ -445,7 +574,7 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
             logger.warning(f"⚠️ No overviews found for indices {idx_ids}")
         return aggregated[:40]
 
-    def _route_using_overviews(self, query: str, overviews: List[str]) -> bool:
+    def _route_using_overviews(self, query: str, overviews: list[str]) -> bool:
         """
         🎯 Use document overviews and LLM to make intelligent routing decisions.
         
@@ -511,7 +640,7 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
             logger.warning(f"❌ LLM routing failed: {e}, falling back to pattern matching")
             return self._simple_pattern_routing(query, [])
 
-    def _simple_pattern_routing(self, message: str, idx_ids: List[str]) -> bool:
+    def _simple_pattern_routing(self, message: str, idx_ids: list[str]) -> bool:
         """
         📝 FALLBACK: Simple pattern-based routing (original logic).
         """
@@ -587,7 +716,7 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
             logger.error(f"❌ Direct LLM error: {e}")
             return f"Error processing query: {str(e)}", []
     
-    def _handle_rag_query(self, session_id: str, message: str, data: dict, idx_ids: List[str]):
+    def _handle_rag_query(self, session_id: str, message: str, data: dict, idx_ids: list[str]):
         """
         Handle query using the full RAG pipeline (delegates to the advanced RAG API running on port 8001).
 
@@ -596,12 +725,12 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
         """
         # Defaults
         response_text = ""
-        source_docs: List[dict] = []
+        source_docs: list[dict] = []
 
         # Build payload for RAG API
         rag_api_url = "http://localhost:8001/chat"
         table_name = f"text_pages_{idx_ids[-1]}" if idx_ids else None
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "query": message,
             "session_id": session_id,
         }
@@ -609,7 +738,7 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
             payload["table_name"] = table_name
 
         # Copy optional parameters from the incoming request
-        optional_params: Dict[str, tuple[type, str]] = {
+        optional_params: dict[str, tuple[type, str]] = {
             "compose_sub_answers": (bool, "compose_sub_answers"),
             "query_decompose": (bool, "query_decompose"),
             "ai_rerank": (bool, "ai_rerank"),
@@ -665,6 +794,17 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
     
     def handle_file_upload(self, session_id: str):
         """Handle file uploads, save them, and associate with the session."""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+        except (TypeError, ValueError):
+            content_length = 0
+        if content_length > MAX_TOTAL_UPLOAD_BYTES:
+            self.send_json_response(
+                {"error": f"Upload exceeds maximum total size of {MAX_TOTAL_UPLOAD_BYTES // (1024*1024)}MB"},
+                status_code=413,
+            )
+            return
+
         form = cgi.FieldStorage(
             fp=self.rfile,
             headers=self.headers,
@@ -849,6 +989,17 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
     
     def handle_index_file_upload(self, index_id: str):
         """Reuse file upload logic but store docs under index."""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+        except (TypeError, ValueError):
+            content_length = 0
+        if content_length > MAX_TOTAL_UPLOAD_BYTES:
+            self.send_json_response(
+                {"error": f"Upload exceeds maximum total size of {MAX_TOTAL_UPLOAD_BYTES // (1024*1024)}MB"},
+                status_code=413,
+            )
+            return
+
         form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={'REQUEST_METHOD':'POST', 'CONTENT_TYPE': self.headers['Content-Type']})
         uploaded_files=[]
         if 'files' in form:
@@ -923,7 +1074,8 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
 
             # Delegate to advanced RAG API same as session indexing
             rag_api_url = "http://localhost:8001/index"
-            import requests, json as _json
+
+            import requests
             # Use the index's dedicated LanceDB table so retrieval matches
             table_name = index.get("vector_table_name")
             payload = {
