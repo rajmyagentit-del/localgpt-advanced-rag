@@ -24,6 +24,28 @@
   </p>
 </div>
 
+## 🍴 About This Fork
+
+This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer/localGPT) (MIT License - see [LICENSE](LICENSE)), which I'm using as a portfolio project to demonstrate production-engineering skills on top of a genuinely advanced RAG system. All core retrieval/agent logic below is the original author's work; the improvements in this section are mine.
+
+**Completed so far:**
+
+| # | Improvement | What changed |
+|---|---|---|
+| 1 | Structured logging | Replaced ~594 `print()` calls across 30 files with leveled, environment-configurable logging (`LOG_LEVEL`, `LOG_FORMAT=json` for machine-parseable output). Also fixed a real bug where 4 different files independently called `logging.basicConfig()`, causing inconsistent/duplicate log output depending on import order. |
+| 2 | Centralized configuration | Replaced ~8 scattered `os.getenv()` calls with a single validated `Settings` object (`rag_system/config.py`, Pydantic Settings) - invalid config now fails fast at startup with a clear error instead of a confusing runtime bug. |
+| 3 | Real health checks | `/health` now actually verifies Ollama, SQLite, and LanceDB, returning HTTP 503 (not a fake 200) when a required dependency is down - the correct signal for a load balancer or container orchestrator. |
+| 4 | Linting/formatting/type-checking | Added `ruff`, `black`, and `mypy` via `pyproject.toml` + pre-commit hooks. Not just decorative - running it surfaced and fixed real issues, including one auto-fix regression (see below). |
+| 5 | Unit tests | Added a `pytest` suite (`tests/`) covering the pure logic (cosine similarity, cache key generation, logging formatter, input validation, rate limiter) - 32 tests, all passing. |
+| 6 | Input validation | Session/index IDs are now validated as well-formed UUIDs at every route before touching the database; chat messages are validated for type, emptiness, and max length; uploads are capped (413 on oversized requests). |
+| 7 | README overhaul | This section, plus corrected environment-variable documentation (the original docs referenced env vars - `DATABASE_PATH`, `VECTOR_DB_PATH` - that didn't match the actual code). |
+| 8 | Rate limiting | Per-IP rate limiting on `/chat`-type and upload endpoints (in-memory, fixed-window), returning proper `429` + `Retry-After` headers. |
+
+**A real bug found along the way:** while running the new `ruff --fix` auto-formatter (item 4) against the codebase, it silently rewrote `Optional[callable]` to `callable | None` in `agent/loop.py` - which looks equivalent but isn't (`callable`, the builtin function, doesn't support the `|` operator the way an actual type does), and broke the module at import time. My new test suite (item 5) caught it immediately on the next run. Fixed by using `typing.Callable` instead. This is exactly why automated fixes get re-tested, not just trusted.
+
+See the "Roadmap" section further down this README for what's planned next.
+
+
 ## 🚀 What is LocalGPT?
 
 LocalGPT is a **fully private, on-premise Document Intelligence platform**. Ask questions, summarise, and uncover insights from your files with state-of-the-art AI—no data ever leaves your machine.
@@ -259,24 +281,42 @@ nano .env
 ```
 
 **Key Configuration Options:**
+
+> All of these are now read through a single validated config object
+> (`rag_system/config.py`, built on Pydantic Settings) instead of scattered
+> `os.getenv()` calls - invalid values fail fast at startup with a clear
+> error instead of surfacing as a confusing bug three requests later.
+
 ```env
-# AI Models (referenced in rag_system/main.py)
+# LLM Backend
+LLM_BACKEND=ollama          # "ollama" or "watsonx"
 OLLAMA_HOST=http://localhost:11434
 
-# Database Paths (used by backend and RAG system)
-DATABASE_PATH=./backend/chat_data.db
-VECTOR_DB_PATH=./lancedb
+# IBM Watson X (only required if LLM_BACKEND=watsonx)
+WATSONX_API_KEY=
+WATSONX_PROJECT_ID=
+WATSONX_URL=https://us-south.ml.cloud.ibm.com
+WATSONX_GENERATION_MODEL=ibm/granite-13b-chat-v2
+WATSONX_ENRICHMENT_MODEL=ibm/granite-8b-japanese
 
-# Server Settings (used by run_system.py)
+# Storage paths
+LANCEDB_PATH=./rag_system/index_store/lancedb
+CHAT_DB_PATH=chat_data.db
+
+# Server ports
 BACKEND_PORT=8000
-FRONTEND_PORT=3000
 RAG_API_PORT=8001
+FRONTEND_PORT=3000
 
-# Optional: Override default models
-GENERATION_MODEL=qwen3:8b
-ENRICHMENT_MODEL=qwen3:0.6b
-EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
-RERANKER_MODEL=answerdotai/answerai-colbert-small-v1
+# Pipeline mode
+RAG_CONFIG_MODE=default     # "default" or "fast"
+
+# Logging (see "Logging" section below)
+LOG_LEVEL=INFO               # DEBUG | INFO | WARNING | ERROR
+LOG_FORMAT=text              # text (human-readable) | json (machine-parseable)
+
+# Optional: HuggingFace token, for gated models
+HF_TOKEN=
 ```
 
 #### 4. Initialize the System
@@ -827,6 +867,38 @@ graph TD
 
 ---
 
+## 🧪 Testing & Code Quality
+
+This fork adds a real test suite and enforced code quality tooling on top of the original project.
+
+```bash
+# Run the test suite
+pip install pytest
+python -m pytest tests/ -v
+
+# Lint, format-check, and type-check
+pip install ruff black mypy
+ruff check .
+black --check .
+mypy rag_system/config.py rag_system/agent/ rag_system/utils/
+
+# One-time setup: run all of the above automatically on every commit
+pip install pre-commit
+pre-commit install
+```
+
+Current coverage focuses on pure, dependency-free logic (fast, no mocking of Ollama/LanceDB required): cosine similarity, semantic-cache key generation, the JSON log formatter, input validation, and the rate limiter. See the roadmap below for where broader (including LLM-output) evaluation is headed.
+
+## 🗺️ Roadmap
+
+This fork is being built out as a portfolio project, following a 23-item production-readiness roadmap (Easy → Medium → Hard). Current status:
+
+- ✅ **Easy tier (8/8 complete):** structured logging, centralized config, real health checks, lint/format/type tooling, unit tests, input validation, this README, rate limiting.
+- ⬜ **Medium tier (0/10):** FastAPI migration, auth, CI/CD, observability (Langfuse/OpenTelemetry), automated RAG evaluation (Ragas), async indexing queue, Redis-backed cache, API versioning, retry/backoff, Docker hardening.
+- ⬜ **Hard tier (0/5):** completing the GraphRAG feature end-to-end, PostgreSQL migration, multi-tenant isolation, a live evaluation/regression dashboard, a self-correcting agentic verification loop.
+
+---
+
 ## 🤝 Contributing
 
 We welcome contributions from developers of all skill levels! LocalGPT is an open-source project that benefits from community involvement.
@@ -880,9 +952,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Support
 
 - **Documentation**: [Technical Docs](TECHNICAL_DOCS.md)
-- **Issues**: [GitHub Issues](https://github.com/PromtEngineer/localGPT/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/PromtEngineer/localGPT/discussions)
-- **Business Deployment and Customization**: [Contact Us](https://tally.so/r/wv6R2d)
+- **Issues on this fork**: [GitHub Issues](https://github.com/rajmyagentit-del/localgpt-advanced-rag/issues)
+- **Original project**: [PromtEngineer/localGPT](https://github.com/PromtEngineer/localGPT) - for upstream discussions, business inquiries, and the original Discord/community links
 ---
 
 <div align="center">
