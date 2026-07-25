@@ -1,0 +1,36 @@
+# Pre-commit hooks - run automatically before every `git commit`.
+#
+# One-time setup (each developer runs this once after cloning):
+#   pip install pre-commit
+#   pre-commit install
+#
+# After that, these checks run automatically on every commit. To run them
+# manually against everything (e.g. right after adding this file):
+#   pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [pydantic>=2.0, pydantic-settings]
+        # Type-check application code only - skip one-off scripts/tests
+        # for now, to keep this fast and high-signal rather than noisy.
+        files: ^rag_system/(config|agent|utils)/.*\.py$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: [--maxkb=5000]
+      - id: check-merge-conflict

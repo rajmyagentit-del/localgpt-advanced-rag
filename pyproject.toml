@@ -1,0 +1,59 @@
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312"]
+# Generated/vendored or heavily auto-formatted areas can be excluded here
+# if any show up later (e.g. migrations).
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+    ".git",
+    "__pycache__",
+    "node_modules",
+    ".next",
+    "lancedb",
+    "index_store",
+]
+
+[tool.ruff.lint]
+# Start with a focused, high-signal rule set rather than turning on
+# everything at once - a huge wall of pre-existing lint errors on day one
+# just gets ignored. This is meant to grow over time.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports/vars, undefined names, etc.)
+    "I",   # isort (import ordering)
+    "UP",  # pyupgrade (modernize syntax for the target Python version)
+    "B",   # flake8-bugbear (common bug patterns)
+]
+ignore = [
+    "E501",  # line length is handled by black/ruff-format, not the linter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files commonly have intentionally-unused fixtures/imports
+"tests/*" = ["F401"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true   # most ML libs (torch, transformers, lancedb...) lack full stubs
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Start permissive (don't require every function to be annotated yet) -
+# this can be tightened incrementally, file by file, as the codebase
+# gains more type coverage. A fresh codebase-wide `strict = true` on a
+# large existing project produces hundreds of errors on day one that
+# nobody will realistically fix immediately.
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# The heaviest ML/vision modules are the least likely to be meaningfully
+# type-checked without significant stub work - exempted for now.
+module = [
+    "rag_system.indexing.multimodal",
+    "rag_system.indexing.representations",
+    "rag_system.rerankers.*",
+]
+ignore_errors = true

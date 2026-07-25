@@ -30,9 +30,8 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from textwrap import shorten
-from typing import Dict, List
 
 
 class JsonFormatter(logging.Formatter):
@@ -45,7 +44,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -78,7 +77,7 @@ def setup_logging(level: str | None = None) -> None:
     if _configured:
         return
 
-    resolved_level = (level or os.getenv("LOG_LEVEL", "INFO")).upper()
+    resolved_level: str = (level if level is not None else os.getenv("LOG_LEVEL", "INFO")).upper()
     log_format = os.getenv("LOG_FORMAT", "text").lower()
 
     root_logger = logging.getLogger()
@@ -111,7 +110,7 @@ def setup_logging(level: str | None = None) -> None:
 logger = logging.getLogger("rag-system")
 
 
-def log_query(query: str, sub_queries: List[str] | None = None) -> None:
+def log_query(query: str, sub_queries: list[str] | None = None) -> None:
     """Emit a nicely-formatted block describing the incoming query and any
     decomposition."""
     border = "=" * 60
@@ -122,7 +121,7 @@ def log_query(query: str, sub_queries: List[str] | None = None) -> None:
     logger.info("%s", border)
 
 
-def log_retrieval_results(results: List[Dict], k: int) -> None:
+def log_retrieval_results(results: list[dict], k: int) -> None:
     """Show chunk_id, truncated text and score for the first *k* rows."""
     if not results:
         logger.info("Retrieval returned 0 documents.")

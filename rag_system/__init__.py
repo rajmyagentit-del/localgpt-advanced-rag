@@ -53,7 +53,7 @@ def _hf_auto_login() -> None:
     try:
         from huggingface_hub import login as hf_login
 
-        hf_login(token=token, add_to_git_credential=False)  # type: ignore
+        hf_login(token=token, add_to_git_credential=False)
         logging.getLogger(__name__).info("Authenticated to Hugging Face Hub via env token.")
     except Exception as exc:  # pragma: no cover – best-effort login
         logging.getLogger(__name__).warning(
