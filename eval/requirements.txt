@@ -1,0 +1,14 @@
+# Extra dependencies for the RAG evaluation suite (Improvement #13).
+# Kept separate from the main requirements.txt / rag_system/requirements.txt
+# since the core app doesn't need these - only running `python -m eval.run_eval` does.
+# Install with: pip install -r eval/requirements.txt
+#
+# NOTE on the langchain-community pin: as of writing, the latest `ragas`
+# release imports a symbol (ChatVertexAI) that was removed from the
+# latest langchain-community release, causing an ImportError. Pinning
+# langchain-community to 0.3.19 resolves this (verified working). If a
+# newer ragas release fixes this upstream, this pin can likely be removed -
+# just re-verify `python -c "import ragas"` succeeds before removing it.
+ragas
+openai
+langchain-community==0.3.19

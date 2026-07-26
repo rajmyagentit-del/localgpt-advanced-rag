@@ -40,8 +40,16 @@ This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer
 | 6 | Input validation | Session/index IDs are now validated as well-formed UUIDs at every route before touching the database; chat messages are validated for type, emptiness, and max length; uploads are capped (413 on oversized requests). |
 | 7 | README overhaul | This section, plus corrected environment-variable documentation (the original docs referenced env vars - `DATABASE_PATH`, `VECTOR_DB_PATH` - that didn't match the actual code). |
 | 8 | Rate limiting | Per-IP rate limiting on `/chat`-type and upload endpoints (in-memory, fixed-window), returning proper `429` + `Retry-After` headers. |
+| 12 | Observability (tracing) | Every query is now traced end-to-end (triage → retrieval → verification) with [OpenTelemetry](https://opentelemetry.io/) - latency and key attributes (query type, doc counts, confidence scores) per step, viewable via console output by default (`LOG_LEVEL`-style env var control: `OTEL_TRACES_EXPORTER=console\|file\|otlp\|none`). Deliberately **not** defaulted to a cloud SaaS backend (e.g. Langfuse Cloud) - that would work against this project's "100% local, private" positioning. Point it at Langfuse/Jaeger/any OTLP backend later via `OTEL_EXPORTER_OTLP_ENDPOINT` without touching the instrumentation code. |
+| 13 | Automated RAG evaluation (`eval/`) | Ragas-based suite scoring faithfulness, answer relevancy, context precision, and context recall against a golden question/reference-answer dataset, run through the REAL agent (not mocked). Judged by a **local Ollama model** via the OpenAI-compatible client (`openai` package, no LangChain needed) - consistent with the local-first ethos. See `eval/requirements.txt` for a real, documented dependency pin needed to make `ragas` import cleanly against the current LangChain ecosystem. |
 
 **A real bug found along the way:** while running the new `ruff --fix` auto-formatter (item 4) against the codebase, it silently rewrote `Optional[callable]` to `callable | None` in `agent/loop.py` - which looks equivalent but isn't (`callable`, the builtin function, doesn't support the `|` operator the way an actual type does), and broke the module at import time. My new test suite (item 5) caught it immediately on the next run. Fixed by using `typing.Callable` instead. This is exactly why automated fixes get re-tested, not just trusted.
+
+**A second one, from building the tracing (item 12):** OpenTelemetry's global `TracerProvider` can only be set once per process - later attempts are silently ignored. Since `tests/` has no `__init__.py`, a test file doing `from tests.conftest import X` actually re-imports `conftest.py` under a second, disconnected module identity, creating a second provider that never receives real spans. Fixed by moving the test fixture into `conftest.py` itself and letting pytest's fixture injection handle it, instead of an explicit cross-module import.
+
+**A third, from building the eval suite (item 13):** the latest `ragas` release fails to import at all against the current LangChain ecosystem (`ImportError: cannot import name 'ChatVertexAI'` - a symbol removed from a newer `langchain-community` than `ragas` expects). Pinning `langchain-community==0.3.19` (see `eval/requirements.txt`) fixes it - verified in an isolated environment rather than blindly forcing the pin into the main project's dependencies. Separately, my first attempt at wiring Ragas to a local Ollama model used a synchronous `OpenAI` client while calling the async `.ascore()` methods - it failed immediately and clearly ("Cannot use agenerate() with a synchronous client"), fixed by switching to `AsyncOpenAI`.
+
+Three real, verified bugs, three real fixes - this is the actual, honest pattern of doing this kind of work, not a highlight reel.
 
 See the "Roadmap" section further down this README for what's planned next.
 
@@ -887,14 +895,28 @@ pip install pre-commit
 pre-commit install
 ```
 
-Current coverage focuses on pure, dependency-free logic (fast, no mocking of Ollama/LanceDB required): cosine similarity, semantic-cache key generation, the JSON log formatter, input validation, and the rate limiter. See the roadmap below for where broader (including LLM-output) evaluation is headed.
+Current coverage focuses on pure, dependency-free logic (fast, no mocking of Ollama/LanceDB required): cosine similarity, semantic-cache key generation, the JSON log formatter, input validation, the rate limiter, and the eval-suite's aggregation/pass-fail logic.
+
+### Running the RAG Evaluation Suite
+
+Unlike the unit tests above, this needs a real, running Ollama instance (it judges answer quality with an actual local LLM - there's no meaningful way to fake that judgment):
+
+```bash
+pip install -r eval/requirements.txt
+ollama pull qwen3:8b
+ollama pull nomic-embed-text
+
+python -m eval.run_eval --json-out eval_results.json --md-out eval_results.md
+```
+
+Exits with status code 1 if any metric average falls below its threshold (see `eval/report.py`) - designed to gate a CI pipeline once one exists (see Roadmap). The example questions in `eval/golden_dataset.py` are placeholders; replace them with real question/reference-answer pairs from documents you've actually indexed.
 
 ## 🗺️ Roadmap
 
 This fork is being built out as a portfolio project, following a 23-item production-readiness roadmap (Easy → Medium → Hard). Current status:
 
 - ✅ **Easy tier (8/8 complete):** structured logging, centralized config, real health checks, lint/format/type tooling, unit tests, input validation, this README, rate limiting.
-- ⬜ **Medium tier (0/10):** FastAPI migration, auth, CI/CD, observability (Langfuse/OpenTelemetry), automated RAG evaluation (Ragas), async indexing queue, Redis-backed cache, API versioning, retry/backoff, Docker hardening.
+- 🟡 **Medium tier (2/10):** ✅ observability/tracing, ✅ automated RAG evaluation. Remaining: FastAPI migration, auth, CI/CD, async indexing queue, Redis-backed cache, API versioning, retry/backoff, Docker hardening.
 - ⬜ **Hard tier (0/5):** completing the GraphRAG feature end-to-end, PostgreSQL migration, multi-tenant isolation, a live evaluation/regression dashboard, a self-correcting agentic verification loop.
 
 ---
