@@ -2,10 +2,23 @@ import json
 import logging
 
 import requests
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from rag_system.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Shared retry policy for transient network issues talking to Ollama:
+# 3 attempts total, exponential backoff (1s, 2s, 4s, capped at 10s).
+# Only retries on RequestException (connection refused, timeout, etc) -
+# NOT on a 4xx/5xx HTTP response, which usually means something is
+# actually wrong (bad request, model not found) rather than transient.
+_ollama_retry = retry(
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True,  # after exhausting retries, raise the last exception (don't swallow it here)
+)
 
 class OllamaClient:
     def __init__(self, base_url: str | None = None):
@@ -13,6 +26,12 @@ class OllamaClient:
             base_url = settings.ollama_host
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
+
+    @_ollama_retry
+    def _post(self, path: str, **kwargs):
+        """Internal: POST to Ollama with retry-on-transient-failure. Raises
+        on failure after retries are exhausted - callers handle that."""
+        return requests.post(f"{self.api_url}{path}", **kwargs)
     
     def is_ollama_running(self) -> bool:
         """Check if Ollama server is running"""
@@ -87,8 +106,8 @@ class OllamaClient:
             else:
                 payload["think"] = True
             
-            response = requests.post(
-                f"{self.api_url}/chat",
+            response = self._post(
+                "/chat",
                 json=payload,
                 timeout=60
             )

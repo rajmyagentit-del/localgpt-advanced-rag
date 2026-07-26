@@ -38,3 +38,6 @@ ruff
 black
 mypy
 pre-commit
+tenacity
+redis
+fakeredis

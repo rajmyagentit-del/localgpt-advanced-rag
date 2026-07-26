@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 import numpy as np
 import json
 import logging
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,20 @@ class LanceDBManager:
         self.db = lancedb.connect(db_path)
         logger.info(f"LanceDB connection established at: {db_path}")
 
+    @retry(
+        # LanceDB is a local, file-backed embedded database - most failures
+        # here are genuine bugs (bad table name, corrupt data) that a retry
+        # would not fix, and could even mask. The ONE legitimate transient
+        # failure mode is lock contention when another process/thread is
+        # mid-write to the same table - which typically surfaces as an
+        # OSError at the filesystem level. We scope the retry narrowly to
+        # that, rather than blindly retrying on any exception (which could
+        # silently retry a real schema/data bug 3 times before giving up).
+        retry=retry_if_exception_type(OSError),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=0.5, min=0.5, max=3),
+        reraise=True,
+    )
     def get_table(self, table_name: str):
         return self.db.open_table(table_name)
 

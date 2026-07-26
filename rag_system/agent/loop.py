@@ -7,13 +7,14 @@ import time
 from typing import Any, Callable
 
 import numpy as np
-from cachetools import LRUCache, TTLCache
+from cachetools import LRUCache
 
 from rag_system.agent.verifier import Verifier
 from rag_system.pipelines.retrieval_pipeline import RetrievalPipeline
 from rag_system.retrieval.query_transformer import GraphQueryTranslator, QueryDecomposer
 from rag_system.retrieval.retrievers import GraphRetriever
 from rag_system.observability import traced, traced_span
+from rag_system.agent.semantic_cache import get_semantic_cache
 from rag_system.utils.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
@@ -35,9 +36,11 @@ class Agent:
         self.verifier = Verifier(llm_client, gen_model)
         self.query_decomposer = QueryDecomposer(llm_client, gen_model)
         
-        # 🚀 OPTIMIZED: TTL cache now stores embeddings for semantic matching
+        # 🚀 Semantic cache: Redis-backed if REDIS_URL is configured and
+        # reachable (shared across instances), otherwise falls back to an
+        # in-process TTL cache automatically - see semantic_cache.py.
         self._cache_max_size = 100  # fallback size limit for manual eviction helper
-        self._query_cache: TTLCache = TTLCache(maxsize=self._cache_max_size, ttl=300)
+        self._query_cache = get_semantic_cache(maxsize=self._cache_max_size, ttl=300)
         self.semantic_cache_threshold = self.pipeline_configs.get("semantic_cache_threshold", 0.98)
         # If set to "session", semantic-cache hits will be restricted to the same chat session.
         # Otherwise (default "global") answers can be reused across sessions.

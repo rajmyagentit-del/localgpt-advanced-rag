@@ -78,6 +78,11 @@ class Settings(BaseSettings):
         validation_alias="CHAT_DB_PATH",
     )
 
+    # --- Redis (optional - powers the distributed semantic cache; falls
+    #     back to an in-process cache if unset or unreachable, so the app
+    #     still works out of the box without Redis) ---
+    redis_url: str = Field(default="", validation_alias="REDIS_URL")
+
     # --- HuggingFace auth (optional, for gated models) ---
     hf_token: str = Field(default="", validation_alias="HF_TOKEN")
 
