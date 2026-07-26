@@ -30,3 +30,50 @@ fake_retrievers = types.ModuleType("rag_system.retrieval.retrievers")
 fake_retrievers.GraphRetriever = type("GraphRetriever", (), {})
 fake_retrievers.MultiVectorRetriever = type("MultiVectorRetriever", (), {})
 sys.modules["rag_system.retrieval.retrievers"] = fake_retrievers
+
+
+# --- Tracing test setup (Improvement #12) ---
+# OpenTelemetry's global TracerProvider can only be set ONCE per process
+# (later calls to trace.set_tracer_provider() are silently ignored, with
+# a warning). rag_system/__init__.py auto-calls setup_tracing() the
+# moment anything imports the rag_system package - so we MUST install
+# our in-memory test provider here, in conftest.py, since pytest
+# guarantees this file is imported before any test module (and
+# therefore before any test module's `from rag_system...` import can
+# trigger the real, console-exporting setup).
+from opentelemetry import trace as _otel_trace
+from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter as _InMemorySpanExporter,
+)
+
+TEST_SPAN_EXPORTER = _InMemorySpanExporter()
+_test_provider = _TracerProvider()
+_test_provider.add_span_processor(_SimpleSpanProcessor(TEST_SPAN_EXPORTER))
+_otel_trace.set_tracer_provider(_test_provider)
+
+import rag_system.observability as _obs
+
+_obs._initialized = True  # prevents the real setup_tracing() from trying (and failing) to override this
+
+
+import pytest
+
+
+@pytest.fixture
+def span_exporter():
+    """
+    Clears the shared in-memory exporter before each test that requests
+    it, so tests only see spans created during that test.
+
+    Deliberately defined HERE (not in test_observability.py) and used via
+    pytest's automatic fixture injection - NOT an explicit
+    `from tests.conftest import TEST_SPAN_EXPORTER`, which would re-import
+    this file as a second, disconnected module (tests/ has no __init__.py,
+    so `tests.conftest` and pytest's own `conftest` are two different
+    module identities under Python's import system) and silently produce
+    a second, empty exporter that never receives real spans.
+    """
+    TEST_SPAN_EXPORTER.clear()
+    yield TEST_SPAN_EXPORTER

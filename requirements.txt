@@ -30,3 +30,11 @@ pandas
 sentence_transformers
 rerankers
 nltk
+pydantic-settings
+opentelemetry-api
+opentelemetry-sdk
+pytest
+ruff
+black
+mypy
+pre-commit

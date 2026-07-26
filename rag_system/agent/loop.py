@@ -13,6 +13,7 @@ from rag_system.agent.verifier import Verifier
 from rag_system.pipelines.retrieval_pipeline import RetrievalPipeline
 from rag_system.retrieval.query_transformer import GraphQueryTranslator, QueryDecomposer
 from rag_system.retrieval.retrievers import GraphRetriever
+from rag_system.observability import traced, traced_span
 from rag_system.utils.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,7 @@ Latest User Query: "{query}"
         return prompt
 
     # ---------------- Asynchronous triage using Ollama ----------------
+    @traced("agent.triage")
     async def _triage_query_async(self, query: str, history: list) -> str:
         
         logger.debug(f"Starting triage for query: '{query[:100]}...'")
@@ -266,6 +268,7 @@ Respond with JSON: {{"category": "<your_choice>"}}
         return asyncio.run(self._run_async(query, table_name, session_id, compose_sub_answers, query_decompose, ai_rerank, context_expand, verify, retrieval_k, context_window_size, reranker_top_k, search_type, dense_weight, max_retries, event_callback))
 
     # ---------------- Main async implementation --------------------------------------
+    @traced("agent.run_query")
     async def _run_async(self, query: str, table_name: str = None, session_id: str = None, compose_sub_answers: bool | None = None, query_decompose: bool | None = None, ai_rerank: bool | None = None, context_expand: bool | None = None, verify: bool | None = None, retrieval_k: int | None = None, context_window_size: int | None = None, reranker_top_k: int | None = None, search_type: str | None = None, dense_weight: float | None = None, max_retries: int = 1, event_callback: Callable | None = None) -> dict[str, Any]:
         start_time = time.time()
         
@@ -417,12 +420,14 @@ Respond with JSON: {{"category": "<your_choice>"}}
                 # parallel/composition machinery for efficiency.
                 if len(sub_queries) == 1:
                     logger.debug("Only one sub-query after decomposition; using direct retrieval path")
-                    result = self.retrieval_pipeline.run(
-                        sub_queries[0],
-                        table_name,
-                        0 if context_expand is False else None,
-                        event_callback=event_callback
-                    )
+                    with traced_span("agent.retrieval", table_name=str(table_name), query_type="single_subquery") as retrieval_span:
+                        result = self.retrieval_pipeline.run(
+                            sub_queries[0],
+                            table_name,
+                            0 if context_expand is False else None,
+                            event_callback=event_callback
+                        )
+                        retrieval_span.set_attribute("num_source_docs", len(result.get("source_documents", [])))
                     if event_callback:
                         event_callback("single_query_result", result)
                     # Emit retrieval_done and rerank_done for single sub-query
@@ -593,7 +598,9 @@ FINAL ANSWER:
                     snippet = (d.get('text','') or '')[:200].replace('\n',' ')
                     logger.debug(f"Orig[{i}] id={d.get('chunk_id')} dist={d.get('_distance','') or d.get('score','')}  {snippet}")
 
-                result = self.retrieval_pipeline.run(contextual_query, table_name, 0 if context_expand is False else None, event_callback=event_callback)
+                with traced_span("agent.retrieval", table_name=str(table_name), query_type="direct") as retrieval_span:
+                    result = self.retrieval_pipeline.run(contextual_query, table_name, 0 if context_expand is False else None, event_callback=event_callback)
+                    retrieval_span.set_attribute("num_source_docs", len(result.get("source_documents", [])))
 
                 # After run, result['source_documents'] is reranked list
                 reranked_docs = result.get('source_documents', [])
@@ -609,7 +616,10 @@ FINAL ANSWER:
             
         if verification_enabled and result.get("source_documents"):
             context_str = "\n".join([doc['text'] for doc in result['source_documents']])
-            verification = await self.verifier.verify_async(contextual_query, context_str, result['answer'])
+            with traced_span("agent.verification", num_source_docs=len(result['source_documents'])) as verify_span:
+                verification = await self.verifier.verify_async(contextual_query, context_str, result['answer'])
+                verify_span.set_attribute("confidence_score", verification.confidence_score)
+                verify_span.set_attribute("is_grounded", verification.is_grounded)
             
             score = verification.confidence_score
 

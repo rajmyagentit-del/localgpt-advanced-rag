@@ -24,6 +24,17 @@ setup_logging()
 logging.getLogger(__name__).debug("Initialized rag_system logging")
 
 # ---------------------------------------------------------
+# Global tracing setup (Improvement #12 - observability)
+# ---------------------------------------------------------
+# Defaults to local-only console export - no network calls, no data
+# leaves your machine, consistent with this project's privacy stance.
+# See rag_system/observability.py for the full explanation and how to
+# point this at Langfuse/Jaeger/any OTLP backend if you want to.
+from rag_system.observability import setup_tracing
+
+setup_tracing()
+
+# ---------------------------------------------------------
 # Authenticate to Hugging Face Hub if a token is provided
 # ---------------------------------------------------------
 from typing import Optional
