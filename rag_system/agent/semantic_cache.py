@@ -26,7 +26,6 @@ Redis once you care about multi-instance deployment.
 import logging
 import pickle
 from collections.abc import Iterator, MutableMapping
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

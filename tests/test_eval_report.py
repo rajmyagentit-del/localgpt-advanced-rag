@@ -9,7 +9,7 @@ suite of already-computed scores passes or fails - the part that would
 actually gate a CI pipeline.
 """
 
-from eval.report import CaseResult, EvalReport, build_report, DEFAULT_THRESHOLDS
+from eval.report import DEFAULT_THRESHOLDS, CaseResult, EvalReport, build_report
 
 
 class TestMetricAverages:

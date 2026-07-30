@@ -13,8 +13,8 @@ with how the rest of this project's test suite handles ML-dependent
 code (see retrieval_pipeline.py's docstrings for the same reasoning).
 """
 
-import tempfile
 import os
+import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -167,6 +167,25 @@ class TestIndexCRUD:
         assert build_resp.status_code == 400
 
 
+class TestAsyncIndexing:
+    """Improvement #14 - tests the endpoint's behavior for the
+    no-documents case (needs no queue/Redis) and confirms the job status
+    endpoint responds correctly for a nonexistent job. Full queue
+    behavior itself is covered directly in tests/test_tasks.py."""
+
+    def test_indexing_session_with_no_documents_returns_message(self, client):
+        create_resp = client.post("/v1/sessions", json={"title": "Empty Session"})
+        session_id = create_resp.json()["session_id"]
+
+        response = client.post(f"/v1/sessions/{session_id}/index")
+        assert response.status_code == 200
+        assert "No documents" in response.json()["message"]
+
+    def test_job_status_for_nonexistent_job_returns_404(self, client):
+        response = client.get("/v1/jobs/some-fake-job-id")
+        assert response.status_code == 404
+
+
 class TestChatValidation:
     """These test input validation and error handling WITHOUT needing a
     live Ollama server - the actual LLM response content is out of scope."""
@@ -182,9 +201,7 @@ class TestChatValidation:
     def test_session_chat_on_nonexistent_session_returns_404(self, client):
         import uuid
 
-        response = client.post(
-            f"/v1/sessions/{uuid.uuid4()}/messages", json={"message": "hello"}
-        )
+        response = client.post(f"/v1/sessions/{uuid.uuid4()}/messages", json={"message": "hello"})
         assert response.status_code == 404
 
     def test_session_chat_with_empty_message_rejected(self, client):
@@ -225,7 +242,9 @@ class TestOpenAPIDocs:
 
 class TestAuthRegisterAndLogin:
     def test_register_creates_account_and_returns_token(self, client):
-        response = client.post("/v1/auth/register", json={"email": "alice@example.com", "password": "hunter22"})
+        response = client.post(
+            "/v1/auth/register", json={"email": "alice@example.com", "password": "hunter22"}
+        )
         assert response.status_code == 201
         body = response.json()
         assert "access_token" in body
@@ -233,30 +252,46 @@ class TestAuthRegisterAndLogin:
 
     def test_register_duplicate_email_rejected(self, client):
         client.post("/v1/auth/register", json={"email": "bob@example.com", "password": "hunter22"})
-        response = client.post("/v1/auth/register", json={"email": "bob@example.com", "password": "different1"})
+        response = client.post(
+            "/v1/auth/register", json={"email": "bob@example.com", "password": "different1"}
+        )
         assert response.status_code == 409
 
     def test_register_short_password_rejected(self, client):
-        response = client.post("/v1/auth/register", json={"email": "carol@example.com", "password": "short"})
+        response = client.post(
+            "/v1/auth/register", json={"email": "carol@example.com", "password": "short"}
+        )
         assert response.status_code == 400
 
     def test_register_invalid_email_rejected(self, client):
-        response = client.post("/v1/auth/register", json={"email": "not-an-email", "password": "hunter22"})
+        response = client.post(
+            "/v1/auth/register", json={"email": "not-an-email", "password": "hunter22"}
+        )
         assert response.status_code == 400
 
     def test_login_with_correct_credentials_succeeds(self, client):
-        client.post("/v1/auth/register", json={"email": "dave@example.com", "password": "correct-pw1"})
-        response = client.post("/v1/auth/login", json={"email": "dave@example.com", "password": "correct-pw1"})
+        client.post(
+            "/v1/auth/register", json={"email": "dave@example.com", "password": "correct-pw1"}
+        )
+        response = client.post(
+            "/v1/auth/login", json={"email": "dave@example.com", "password": "correct-pw1"}
+        )
         assert response.status_code == 200
         assert "access_token" in response.json()
 
     def test_login_with_wrong_password_rejected(self, client):
-        client.post("/v1/auth/register", json={"email": "eve@example.com", "password": "correct-pw1"})
-        response = client.post("/v1/auth/login", json={"email": "eve@example.com", "password": "wrong-password"})
+        client.post(
+            "/v1/auth/register", json={"email": "eve@example.com", "password": "correct-pw1"}
+        )
+        response = client.post(
+            "/v1/auth/login", json={"email": "eve@example.com", "password": "wrong-password"}
+        )
         assert response.status_code == 401
 
     def test_login_with_nonexistent_email_rejected(self, client):
-        response = client.post("/v1/auth/login", json={"email": "nobody@example.com", "password": "whatever1"})
+        response = client.post(
+            "/v1/auth/login", json={"email": "nobody@example.com", "password": "whatever1"}
+        )
         assert response.status_code == 401
 
 
@@ -273,7 +308,9 @@ class TestOwnership:
             headers={"Authorization": f"Bearer {token}"},
         )
         session_id = resp.json()["session_id"]
-        get_resp = client.get(f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token}"})
+        get_resp = client.get(
+            f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token}"}
+        )
         assert get_resp.status_code == 200
         assert get_resp.json()["session"]["user_id"] is not None
 
@@ -282,12 +319,16 @@ class TestOwnership:
         token_b = self._register_and_get_token(client, "userb@example.com")
 
         create_resp = client.post(
-            "/v1/sessions", json={"title": "A's Session"}, headers={"Authorization": f"Bearer {token_a}"}
+            "/v1/sessions",
+            json={"title": "A's Session"},
+            headers={"Authorization": f"Bearer {token_a}"},
         )
         session_id = create_resp.json()["session_id"]
 
         # User B tries to access User A's session
-        get_resp = client.get(f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token_b}"})
+        get_resp = client.get(
+            f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token_b}"}
+        )
         assert get_resp.status_code == 403
 
     def test_anonymous_user_cannot_access_owned_session(self, client):
@@ -304,11 +345,15 @@ class TestOwnership:
     def test_owner_can_delete_own_session(self, client):
         token = self._register_and_get_token(client, "owner3@example.com")
         create_resp = client.post(
-            "/v1/sessions", json={"title": "To Delete"}, headers={"Authorization": f"Bearer {token}"}
+            "/v1/sessions",
+            json={"title": "To Delete"},
+            headers={"Authorization": f"Bearer {token}"},
         )
         session_id = create_resp.json()["session_id"]
 
-        delete_resp = client.delete(f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token}"})
+        delete_resp = client.delete(
+            f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token}"}
+        )
         assert delete_resp.status_code == 200
 
     def test_non_owner_cannot_delete_session(self, client):
@@ -316,11 +361,15 @@ class TestOwnership:
         token_b = self._register_and_get_token(client, "userd@example.com")
 
         create_resp = client.post(
-            "/v1/sessions", json={"title": "Protected"}, headers={"Authorization": f"Bearer {token_a}"}
+            "/v1/sessions",
+            json={"title": "Protected"},
+            headers={"Authorization": f"Bearer {token_a}"},
         )
         session_id = create_resp.json()["session_id"]
 
-        delete_resp = client.delete(f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token_b}"})
+        delete_resp = client.delete(
+            f"/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token_b}"}
+        )
         assert delete_resp.status_code == 403
 
     def test_anonymous_session_remains_accessible_to_anyone_backward_compat(self, client):
@@ -340,14 +389,20 @@ class TestOwnership:
         token_b = self._register_and_get_token(client, "indexother@example.com")
 
         create_resp = client.post(
-            "/v1/indexes", json={"name": "Owned Index"}, headers={"Authorization": f"Bearer {token_a}"}
+            "/v1/indexes",
+            json={"name": "Owned Index"},
+            headers={"Authorization": f"Bearer {token_a}"},
         )
         index_id = create_resp.json()["index_id"]
 
         # Owner can access
-        own_resp = client.get(f"/v1/indexes/{index_id}", headers={"Authorization": f"Bearer {token_a}"})
+        own_resp = client.get(
+            f"/v1/indexes/{index_id}", headers={"Authorization": f"Bearer {token_a}"}
+        )
         assert own_resp.status_code == 200
 
         # Other user cannot
-        other_resp = client.get(f"/v1/indexes/{index_id}", headers={"Authorization": f"Bearer {token_b}"})
+        other_resp = client.get(
+            f"/v1/indexes/{index_id}", headers={"Authorization": f"Bearer {token_b}"}
+        )
         assert other_resp.status_code == 403

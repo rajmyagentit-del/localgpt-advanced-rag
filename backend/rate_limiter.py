@@ -16,8 +16,8 @@ stop a single bad client (or a buggy frontend retry loop) from hammering
 the LLM/embedding pipeline.
 """
 
-import time
 import threading
+import time
 from collections import defaultdict, deque
 
 

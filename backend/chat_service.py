@@ -106,7 +106,9 @@ class ChatService:
                     break
 
         if aggregated:
-            logger.info(f"✅ Loaded {len(aggregated)} document overviews from {len(idx_ids)} index(es)")
+            logger.info(
+                f"✅ Loaded {len(aggregated)} document overviews from {len(idx_ids)} index(es)"
+            )
         else:
             logger.warning(f"⚠️ No overviews found for indices {idx_ids}")
         return aggregated[:40]
@@ -148,9 +150,7 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
 
         try:
             response = self.ollama_client.chat(
-                message=router_prompt,
-                model="qwen3:0.6b",
-                enable_thinking=False
+                message=router_prompt, model="qwen3:0.6b", enable_thinking=False
             )
             decision = response.strip().upper()
 
@@ -173,28 +173,73 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
         message_lower = message.lower()
 
         greeting_patterns = [
-            'hello', 'hi', 'hey', 'greetings', 'good morning', 'good afternoon', 'good evening',
-            'how are you', 'how do you do', 'nice to meet', 'pleasure to meet',
-            'thanks', 'thank you', 'bye', 'goodbye', 'see you', 'talk to you later',
-            'test', 'testing', 'check', 'ping', 'just saying', 'nevermind',
-            'ok', 'okay', 'alright', 'got it', 'understood', 'i see'
+            "hello",
+            "hi",
+            "hey",
+            "greetings",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "how are you",
+            "how do you do",
+            "nice to meet",
+            "pleasure to meet",
+            "thanks",
+            "thank you",
+            "bye",
+            "goodbye",
+            "see you",
+            "talk to you later",
+            "test",
+            "testing",
+            "check",
+            "ping",
+            "just saying",
+            "nevermind",
+            "ok",
+            "okay",
+            "alright",
+            "got it",
+            "understood",
+            "i see",
         ]
         for pattern in greeting_patterns:
             if pattern in message_lower:
                 return False
 
         rag_indicators = [
-            'document', 'doc', 'file', 'pdf', 'text', 'content', 'page',
-            'according to', 'based on', 'mentioned', 'states', 'says',
-            'what does', 'summarize', 'summary', 'analyze', 'analysis',
-            'quote', 'citation', 'reference', 'source', 'evidence',
-            'explain from', 'extract', 'find in', 'search for'
+            "document",
+            "doc",
+            "file",
+            "pdf",
+            "text",
+            "content",
+            "page",
+            "according to",
+            "based on",
+            "mentioned",
+            "states",
+            "says",
+            "what does",
+            "summarize",
+            "summary",
+            "analyze",
+            "analysis",
+            "quote",
+            "citation",
+            "reference",
+            "source",
+            "evidence",
+            "explain from",
+            "extract",
+            "find in",
+            "search for",
         ]
         for indicator in rag_indicators:
             if indicator in message_lower:
                 return True
 
-        question_words = ['what', 'how', 'when', 'where', 'why', 'who', 'which']
+        question_words = ["what", "how", "when", "where", "why", "who", "which"]
         starts_with_question = any(message_lower.startswith(word) for word in question_words)
         if starts_with_question and len(message) > 40:
             return True
@@ -206,17 +251,19 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
 
     # --- Query execution ---
 
-    def handle_direct_llm_query(self, session_id: str, message: str, session: dict, db) -> tuple[str, list]:
+    def handle_direct_llm_query(
+        self, session_id: str, message: str, session: dict, db
+    ) -> tuple[str, list]:
         """Handle query using direct Ollama client with thinking disabled for speed."""
         try:
             conversation_history = db.get_conversation_history(session_id)
-            model = session.get('model', 'qwen3:8b')
+            model = session.get("model", "qwen3:8b")
 
             response_text = self.ollama_client.chat(
                 message=message,
                 model=model,
                 conversation_history=conversation_history,
-                enable_thinking=False
+                enable_thinking=False,
             )
             return response_text, []
 
@@ -269,7 +316,9 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
                 response_text = rag_data.get("answer", "No answer found.")
                 source_docs = rag_data.get("source_documents", [])
             else:
-                response_text = f"Error from RAG API ({rag_response.status_code}): {rag_response.text}"
+                response_text = (
+                    f"Error from RAG API ({rag_response.status_code}): {rag_response.text}"
+                )
                 logger.error(f"❌ RAG API error: {response_text}")
         except requests.exceptions.ConnectionError:
             response_text = "Could not connect to the RAG API server. Please ensure it is running."
@@ -279,7 +328,7 @@ Respond with exactly one word: USE_RAG or DIRECT_LLM"""
             logger.error(f"❌ RAG processing error: {e}")
 
         response_text = re.sub(
-            r'<(think|thinking)>.*?</\1>', '', response_text, flags=re.DOTALL | re.IGNORECASE
+            r"<(think|thinking)>.*?</\1>", "", response_text, flags=re.DOTALL | re.IGNORECASE
         ).strip()
 
         return response_text, source_docs

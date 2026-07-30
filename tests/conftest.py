@@ -55,7 +55,9 @@ _otel_trace.set_tracer_provider(_test_provider)
 
 import rag_system.observability as _obs
 
-_obs._initialized = True  # prevents the real setup_tracing() from trying (and failing) to override this
+_obs._initialized = (
+    True  # prevents the real setup_tracing() from trying (and failing) to override this
+)
 
 
 import pytest

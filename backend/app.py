@@ -35,7 +35,6 @@ from pydantic import BaseModel, Field
 from backend.auth import (
     check_ownership,
     create_access_token,
-    get_current_user,
     get_current_user_optional,
     hash_password,
     verify_password,
@@ -44,6 +43,7 @@ from backend.chat_service import ChatService
 from backend.database import ChatDatabase, generate_session_title
 from backend.ollama_client import OllamaClient
 from backend.rate_limiter import chat_rate_limiter, upload_rate_limiter
+from backend.tasks import enqueue_or_run_sync, get_job_status
 from backend.validation import (
     MAX_TOTAL_UPLOAD_BYTES,
     is_valid_id,
@@ -59,6 +59,7 @@ chat_service = ChatService(ollama_client)
 
 try:
     from rag_system.main import PIPELINE_CONFIGS
+
     RAG_SYSTEM_AVAILABLE = True
 except ImportError as e:
     PIPELINE_CONFIGS = {}
@@ -73,6 +74,7 @@ app = FastAPI(
 
 
 # --- Pydantic request/response models ---
+
 
 class RegisterRequest(BaseModel):
     email: str
@@ -191,6 +193,7 @@ def health_check():
 
 # --- Auth (Improvement #10) ---
 
+
 @app.post("/v1/auth/register", status_code=201)
 def register(body: RegisterRequest):
     email = body.email.strip().lower()
@@ -221,7 +224,12 @@ def login(body: LoginRequest):
         raise invalid_credentials
 
     token = create_access_token(user["id"], user["email"])
-    return {"access_token": token, "token_type": "bearer", "user_id": user["id"], "email": user["email"]}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user_id": user["id"],
+        "email": user["email"],
+    }
 
 
 @app.post("/v1/chat")
@@ -233,7 +241,9 @@ def chat(body: ChatRequest, request: Request):
         raise HTTPException(status_code=400, detail=error)
 
     if not ollama_client.is_ollama_running():
-        raise HTTPException(status_code=503, detail="Ollama is not running. Please start Ollama first.")
+        raise HTTPException(
+            status_code=503, detail="Ollama is not running. Please start Ollama first."
+        )
 
     response = ollama_client.chat(body.message, body.model, body.conversation_history)
     return {
@@ -251,17 +261,23 @@ def get_models():
     if ollama_client.is_ollama_running():
         all_ollama_models = ollama_client.list_models()
         ollama_embedding_models = [
-            m for m in all_ollama_models if any(k in m for k in ["embed", "bge", "embedding", "text"])
+            m
+            for m in all_ollama_models
+            if any(k in m for k in ["embed", "bge", "embedding", "text"])
         ]
-        ollama_generation_models = [m for m in all_ollama_models if m not in ollama_embedding_models]
+        ollama_generation_models = [
+            m for m in all_ollama_models if m not in ollama_embedding_models
+        ]
         generation_models.extend(ollama_generation_models)
         embedding_models.extend(ollama_embedding_models)
 
-    embedding_models.extend([
-        "Qwen/Qwen3-Embedding-0.6B",
-        "Qwen/Qwen3-Embedding-4B",
-        "Qwen/Qwen3-Embedding-8B",
-    ])
+    embedding_models.extend(
+        [
+            "Qwen/Qwen3-Embedding-0.6B",
+            "Qwen/Qwen3-Embedding-4B",
+            "Qwen/Qwen3-Embedding-8B",
+        ]
+    )
 
     generation_models.sort()
     embedding_models.sort()
@@ -281,7 +297,9 @@ def cleanup_sessions():
 
 
 @app.post("/v1/sessions", status_code=201)
-def create_session(body: CreateSessionRequest, current_user: dict | None = Depends(get_current_user_optional)):
+def create_session(
+    body: CreateSessionRequest, current_user: dict | None = Depends(get_current_user_optional)
+):
     user_id = current_user["user_id"] if current_user else None
     session_id = db.create_session(body.title, body.model, user_id=user_id)
     session = db.get_session(session_id)
@@ -313,7 +331,11 @@ def delete_session(session_id: str, current_user: dict | None = Depends(get_curr
 
 
 @app.put("/v1/sessions/{session_id}/rename")
-def rename_session(session_id: str, body: RenameSessionRequest, current_user: dict | None = Depends(get_current_user_optional)):
+def rename_session(
+    session_id: str,
+    body: RenameSessionRequest,
+    current_user: dict | None = Depends(get_current_user_optional),
+):
     session_id = _valid_id(session_id, "session")
     session = db.get_session(session_id)
     if not session:
@@ -341,7 +363,12 @@ def get_session_documents(session_id: str):
 
 
 @app.post("/v1/sessions/{session_id}/messages")
-def session_chat(session_id: str, body: SessionChatRequest, request: Request, current_user: dict | None = Depends(get_current_user_optional)):
+def session_chat(
+    session_id: str,
+    body: SessionChatRequest,
+    request: Request,
+    current_user: dict | None = Depends(get_current_user_optional),
+):
     session_id = _valid_id(session_id, "session")
     _rate_limit(request, chat_rate_limiter)
 
@@ -416,7 +443,10 @@ async def upload_files_to_session(session_id: str, request: Request, files: list
     if not uploaded_files:
         raise HTTPException(status_code=400, detail="No files were uploaded")
 
-    return {"message": f"Successfully uploaded {len(uploaded_files)} files.", "uploaded_files": uploaded_files}
+    return {
+        "message": f"Successfully uploaded {len(uploaded_files)} files.",
+        "uploaded_files": uploaded_files,
+    }
 
 
 @app.post("/v1/sessions/{session_id}/index")
@@ -428,27 +458,38 @@ def index_session_documents(session_id: str):
     if not file_paths:
         return {"message": "No documents to index for this session."}
 
-    logger.info(f"Found {len(file_paths)} documents to index. Sending to RAG API...")
+    logger.info(f"Found {len(file_paths)} documents to index.")
 
-    import requests
-    try:
-        rag_response = requests.post(
-            "http://localhost:8001/index", json={"file_paths": file_paths, "session_id": session_id}
-        )
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Exception during indexing: {e}")
-        raise HTTPException(status_code=502, detail=f"Could not reach the RAG API: {e}")
+    result = enqueue_or_run_sync(file_paths, session_id)
 
-    if rag_response.status_code == 200:
-        logger.info("✅ RAG API successfully indexed documents.")
+    if result["mode"] == "async":
+        # Fire-and-forget: the client polls GET /v1/jobs/{job_id} for status
+        return JSONResponse(content=result, status_code=202)
+
+    # Synchronous fallback (no queue available) - same shape of response
+    # as the original blocking behavior, for backward compatibility.
+    if result["status"] == "completed":
         try:
-            db.update_index_metadata(session_id, {"session_linked": True, "retrieval_mode": "hybrid"})
+            db.update_index_metadata(
+                session_id, {"session_linked": True, "retrieval_mode": "hybrid"}
+            )
         except Exception as e:
             logger.warning(f"⚠️ Failed to update index metadata for session index: {e}")
-        return rag_response.json()
+        return result["result"]
 
-    logger.error(f"❌ RAG API indexing failed ({rag_response.status_code}): {rag_response.text}")
-    raise HTTPException(status_code=500, detail=f"Indexing failed: {rag_response.text}")
+    logger.error(f"❌ Indexing failed: {result.get('error')}")
+    raise HTTPException(status_code=500, detail=f"Indexing failed: {result.get('error')}")
+
+
+@app.get("/v1/jobs/{job_id}")
+def get_indexing_job_status(job_id: str):
+    """Poll the status of an async indexing job (Improvement #14)."""
+    status = get_job_status(job_id)
+    if status is None:
+        raise HTTPException(
+            status_code=404, detail="Job not found (it may not exist, or its result has expired)"
+        )
+    return status
 
 
 @app.post("/v1/sessions/{session_id}/pdf-upload", deprecated=True)
@@ -495,7 +536,9 @@ def get_indexes():
 
 
 @app.post("/v1/indexes", status_code=201)
-def create_index(body: CreateIndexRequest, current_user: dict | None = Depends(get_current_user_optional)):
+def create_index(
+    body: CreateIndexRequest, current_user: dict | None = Depends(get_current_user_optional)
+):
     if not body.name:
         raise HTTPException(status_code=400, detail="Name required")
 
@@ -520,7 +563,12 @@ def create_index(body: CreateIndexRequest, current_user: dict | None = Depends(g
         complete_metadata.update(metadata)
         metadata = complete_metadata
 
-    idx_id = db.create_index(body.name, body.description, metadata, user_id=current_user["user_id"] if current_user else None)
+    idx_id = db.create_index(
+        body.name,
+        body.description,
+        metadata,
+        user_id=current_user["user_id"] if current_user else None,
+    )
     return {"index_id": idx_id}
 
 
@@ -617,6 +665,7 @@ def build_index(index_id: str, body: BuildIndexRequest = BuildIndexRequest()):
         payload["overview_model_name"] = body.overviewModel
 
     import requests
+
     try:
         rag_resp = requests.post("http://localhost:8001/index", json=payload)
     except requests.exceptions.RequestException as e:

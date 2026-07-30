@@ -1,13 +1,17 @@
-FROM node:18-alpine
+# syntax=docker/dockerfile:1
 
-# Set working directory
+# --- Stage 1: deps ---
+# Installs dependencies in their own layer, cached independently of
+# source code changes.
+FROM node:18-alpine AS deps
 WORKDIR /app
-
-# Install dependencies (including dev dependencies for build)
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Copy source code and configuration files
+# --- Stage 2: builder ---
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY src/ ./src/
 COPY public/ ./public/
 COPY next.config.ts ./
@@ -15,17 +19,32 @@ COPY tsconfig.json ./
 COPY tailwind.config.js ./
 COPY postcss.config.mjs ./
 COPY eslint.config.mjs ./
+COPY package.json package-lock.json ./
 
-# Build the application (skip linting for Docker)
 ENV NEXT_LINT=false
 RUN npm run build
 
-# Expose port
+# --- Stage 3: runtime ---
+# Thanks to `output: "standalone"` in next.config.ts, .next/standalone
+# contains a minimal, self-contained server - only the files actually
+# needed to run the app, NOT the full node_modules tree (a real,
+# substantial size reduction for a Next.js production image).
+FROM node:18-alpine AS runtime
+WORKDIR /app
+
+RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
 EXPOSE 3000
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:3000 || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1
 
-# Start the application
-CMD ["npm", "start"] 
+CMD ["node", "server.js"]

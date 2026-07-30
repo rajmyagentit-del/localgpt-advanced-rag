@@ -3,15 +3,17 @@ Simple PDF Processing Service
 Handles PDF upload and text extraction for RAG functionality
 """
 
-import uuid
-from typing import List, Dict, Any
-import PyPDF2
-from io import BytesIO
-import sqlite3
-from datetime import datetime
 import logging
+import sqlite3
+import uuid
+from datetime import datetime
+from io import BytesIO
+from typing import Any
+
+import PyPDF2
 
 logger = logging.getLogger(__name__)
+
 
 class SimplePDFProcessor:
     def __init__(self, db_path: str = "chat_data.db"):
@@ -19,11 +21,11 @@ class SimplePDFProcessor:
         self.db_path = db_path
         self.init_database()
         logger.info("✅ Simple PDF processor initialized")
-    
+
     def init_database(self):
         """Initialize SQLite database for storing PDF content"""
         conn = sqlite3.connect(self.db_path)
-        conn.execute('''
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS pdf_documents (
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -31,20 +33,20 @@ class SimplePDFProcessor:
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
-        ''')
-        
+        """)
+
         conn.commit()
         conn.close()
-    
+
     def extract_text_from_pdf(self, pdf_bytes: bytes) -> str:
         """Extract text from PDF bytes"""
         try:
             logger.info(f"📄 Starting PDF text extraction ({len(pdf_bytes)} bytes)")
             pdf_file = BytesIO(pdf_bytes)
             pdf_reader = PyPDF2.PdfReader(pdf_file)
-            
+
             logger.info(f"📖 PDF has {len(pdf_reader.pages)} pages")
-            
+
             text = ""
             for page_num, page in enumerate(pdf_reader.pages):
                 logger.info(f"📄 Processing page {page_num + 1}")
@@ -57,133 +59,145 @@ class SimplePDFProcessor:
                 except Exception as page_error:
                     logger.error(f"❌ Error on page {page_num + 1}: {str(page_error)}")
                     continue
-            
+
             logger.info(f"📄 Total extracted text: {len(text)} characters")
             return text.strip()
-            
+
         except Exception as e:
             logger.error(f"❌ Error extracting text from PDF: {str(e)}")
             logger.error(f"❌ Error type: {type(e).__name__}")
             return ""
-    
-    def process_pdf(self, pdf_bytes: bytes, filename: str, session_id: str) -> Dict[str, Any]:
+
+    def process_pdf(self, pdf_bytes: bytes, filename: str, session_id: str) -> dict[str, Any]:
         """Process a PDF file and store in database"""
         logger.info(f"📄 Processing PDF: {filename}")
-        
+
         # Extract text
         text = self.extract_text_from_pdf(pdf_bytes)
         if not text:
             return {
                 "success": False,
                 "error": "Could not extract text from PDF",
-                "filename": filename
+                "filename": filename,
             }
-        
+
         logger.info(f"📝 Extracted {len(text)} characters from {filename}")
-        
+
         # Store in database
         document_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
-        
+
         try:
             conn = sqlite3.connect(self.db_path)
-            
+
             # Store document
-            conn.execute('''
+            conn.execute(
+                """
                 INSERT INTO pdf_documents (id, session_id, filename, content, created_at)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (document_id, session_id, filename, text, now))
-            
+            """,
+                (document_id, session_id, filename, text, now),
+            )
+
             conn.commit()
             conn.close()
-            
+
             logger.info(f"💾 Stored document {filename} in database")
-            
+
             return {
                 "success": True,
                 "filename": filename,
                 "file_id": document_id,
-                "text_length": len(text)
+                "text_length": len(text),
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error storing in database: {str(e)}")
             return {
                 "success": False,
                 "error": f"Database storage failed: {str(e)}",
-                "filename": filename
+                "filename": filename,
             }
-    
-    def get_session_documents(self, session_id: str) -> List[Dict[str, Any]]:
+
+    def get_session_documents(self, session_id: str) -> list[dict[str, Any]]:
         """Get all documents for a session"""
         try:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
-            
-            cursor = conn.execute('''
+
+            cursor = conn.execute(
+                """
                 SELECT id, filename, created_at
                 FROM pdf_documents
                 WHERE session_id = ?
                 ORDER BY created_at DESC
-            ''', (session_id,))
-            
+            """,
+                (session_id,),
+            )
+
             documents = [dict(row) for row in cursor.fetchall()]
             conn.close()
-            
+
             return documents
-            
+
         except Exception as e:
             logger.error(f"❌ Error getting session documents: {str(e)}")
             return []
-    
+
     def get_document_content(self, session_id: str) -> str:
         """Get all document content for a session (for LLM context)"""
         try:
             conn = sqlite3.connect(self.db_path)
-            
-            cursor = conn.execute('''
+
+            cursor = conn.execute(
+                """
                 SELECT filename, content
                 FROM pdf_documents
                 WHERE session_id = ?
                 ORDER BY created_at ASC
-            ''', (session_id,))
-            
+            """,
+                (session_id,),
+            )
+
             rows = cursor.fetchall()
             conn.close()
-            
+
             if not rows:
                 return ""
-            
+
             # Combine all document content
             combined_content = ""
             for filename, content in rows:
                 combined_content += f"\n\n=== Document: {filename} ===\n\n"
                 combined_content += content
-            
+
             return combined_content.strip()
-            
+
         except Exception as e:
             logger.error(f"❌ Error getting document content: {str(e)}")
             return ""
-    
+
     def delete_session_documents(self, session_id: str) -> bool:
         """Delete all documents for a session"""
         try:
             conn = sqlite3.connect(self.db_path)
-            cursor = conn.execute('''
+            cursor = conn.execute(
+                """
                 DELETE FROM pdf_documents
                 WHERE session_id = ?
-            ''', (session_id,))
-            
+            """,
+                (session_id,),
+            )
+
             deleted_count = cursor.rowcount
             conn.commit()
             conn.close()
-            
+
             if deleted_count > 0:
                 logger.info(f"🗑️ Deleted {deleted_count} documents for session {session_id[:8]}...")
-            
+
             return deleted_count > 0
-            
+
         except Exception as e:
             logger.error(f"❌ Error deleting session documents: {str(e)}")
             return False
@@ -191,6 +205,7 @@ class SimplePDFProcessor:
 
 # Global instance
 simple_pdf_processor = None
+
 
 def initialize_simple_pdf_processor():
     """Initialize the global PDF processor"""
@@ -202,6 +217,7 @@ def initialize_simple_pdf_processor():
         logger.error(f"❌ Failed to initialize PDF processor: {str(e)}")
         simple_pdf_processor = None
 
+
 def get_simple_pdf_processor():
     """Get the global PDF processor instance"""
     global simple_pdf_processor
@@ -209,9 +225,10 @@ def get_simple_pdf_processor():
         initialize_simple_pdf_processor()
     return simple_pdf_processor
 
+
 if __name__ == "__main__":
     # Test the simple PDF processor
     logger.info("🧪 Testing simple PDF processor...")
-    
+
     processor = SimplePDFProcessor()
-    logger.info("✅ Simple PDF processor test completed!") 
+    logger.info("✅ Simple PDF processor test completed!")

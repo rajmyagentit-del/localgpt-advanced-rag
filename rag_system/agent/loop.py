@@ -4,38 +4,48 @@ import json
 import logging
 import os
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 from cachetools import LRUCache
 
+from rag_system.agent.semantic_cache import get_semantic_cache
 from rag_system.agent.verifier import Verifier
+from rag_system.observability import traced, traced_span
 from rag_system.pipelines.retrieval_pipeline import RetrievalPipeline
 from rag_system.retrieval.query_transformer import GraphQueryTranslator, QueryDecomposer
 from rag_system.retrieval.retrievers import GraphRetriever
-from rag_system.observability import traced, traced_span
-from rag_system.agent.semantic_cache import get_semantic_cache
 from rag_system.utils.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
+
 
 class Agent:
     """
     The main agent, now fully wired to use a live Ollama client.
     """
-    def __init__(self, pipeline_configs: dict[str, dict], llm_client: OllamaClient, ollama_config: dict[str, str]):
+
+    def __init__(
+        self,
+        pipeline_configs: dict[str, dict],
+        llm_client: OllamaClient,
+        ollama_config: dict[str, str],
+    ):
         self.pipeline_configs = pipeline_configs
         self.llm_client = llm_client
         self.ollama_config = ollama_config
-        
+
         gen_model = self.ollama_config["generation_model"]
-        
+
         # Initialize the single, persistent retrieval pipeline for this agent
-        self.retrieval_pipeline = RetrievalPipeline(pipeline_configs, self.llm_client, self.ollama_config)
-        
+        self.retrieval_pipeline = RetrievalPipeline(
+            pipeline_configs, self.llm_client, self.ollama_config
+        )
+
         self.verifier = Verifier(llm_client, gen_model)
         self.query_decomposer = QueryDecomposer(llm_client, gen_model)
-        
+
         # 🚀 Semantic cache: Redis-backed if REDIS_URL is configured and
         # reachable (shared across instances), otherwise falls back to an
         # in-process TTL cache automatically - see semantic_cache.py.
@@ -44,10 +54,14 @@ class Agent:
         self.semantic_cache_threshold = self.pipeline_configs.get("semantic_cache_threshold", 0.98)
         # If set to "session", semantic-cache hits will be restricted to the same chat session.
         # Otherwise (default "global") answers can be reused across sessions.
-        self.cache_scope = self.pipeline_configs.get("cache_scope", "global")  # 'global' or 'session'
-        
+        self.cache_scope = self.pipeline_configs.get(
+            "cache_scope", "global"
+        )  # 'global' or 'session'
+
         # 🚀 NEW: In-memory store for conversational history per session
-        self.chat_histories: LRUCache = LRUCache(maxsize=100) # Stores history for 100 recent sessions
+        self.chat_histories: LRUCache = LRUCache(
+            maxsize=100
+        )  # Stores history for 100 recent sessions
 
         graph_config = self.pipeline_configs.get("graph_strategy", {})
         if graph_config.get("enabled"):
@@ -60,13 +74,16 @@ class Agent:
         # ---- Load document overviews for fast routing ----
         self._global_overview_path = os.path.join("index_store", "overviews", "overviews.jsonl")
         self.doc_overviews: list[str] = []
-        self._current_overview_session: str | None = None  # cache key to avoid rereading on every query
+        self._current_overview_session: str | None = (
+            None  # cache key to avoid rereading on every query
+        )
         self._load_overviews(self._global_overview_path)
 
     def _load_overviews(self, path: str):
         """Helper to load overviews from a .jsonl file into self.doc_overviews."""
         import json
         import os
+
         self.doc_overviews.clear()
         if not os.path.exists(path):
             return
@@ -87,6 +104,7 @@ class Agent:
         """Aggregate overviews for the given indexes or fall back to global file."""
         import json
         import os
+
         aggregated: list[str] = []
         for idx in idx_ids:
             path = os.path.join("index_store", "overviews", f"{idx}.jsonl")
@@ -107,41 +125,51 @@ class Agent:
                     logger.warning(f"⚠️  Error reading {path}: {e}")
         if aggregated:
             self.doc_overviews = aggregated
-            self._current_overview_session = "|".join(idx_ids)  # cache composite key so no overwrite
-            logger.info(f"📖 Loaded {len(aggregated)} overviews for indexes {[i[:8] for i in idx_ids]}")
+            self._current_overview_session = "|".join(
+                idx_ids
+            )  # cache composite key so no overwrite
+            logger.info(
+                f"📖 Loaded {len(aggregated)} overviews for indexes {[i[:8] for i in idx_ids]}"
+            )
         else:
-            logger.warning(f"⚠️  No per-index overviews found for {idx_ids}. Using global overview file.")
+            logger.warning(
+                f"⚠️  No per-index overviews found for {idx_ids}. Using global overview file."
+            )
             self._load_overviews(self._global_overview_path)
             self._current_overview_session = "GLOBAL"
 
     def _cosine_similarity(self, v1: np.ndarray, v2: np.ndarray) -> float:
         """Computes cosine similarity between two vectors."""
-        if not isinstance(v1, np.ndarray): v1 = np.array(v1)
-        if not isinstance(v2, np.ndarray): v2 = np.array(v2)
-        
+        if not isinstance(v1, np.ndarray):
+            v1 = np.array(v1)
+        if not isinstance(v2, np.ndarray):
+            v2 = np.array(v2)
+
         if v1.shape != v2.shape:
             raise ValueError("Vectors must have the same shape for cosine similarity.")
 
         if np.all(v1 == 0) or np.all(v2 == 0):
             return 0.0
-            
+
         dot_product = np.dot(v1, v2)
         norm_v1 = np.linalg.norm(v1)
         norm_v2 = np.linalg.norm(v2)
-        
+
         # Avoid division by zero
         if norm_v1 == 0 or norm_v2 == 0:
             return 0.0
-        
+
         return dot_product / (norm_v1 * norm_v2)
 
-    def _find_in_semantic_cache(self, query_embedding: np.ndarray, session_id: str | None = None) -> dict[str, Any] | None:
+    def _find_in_semantic_cache(
+        self, query_embedding: np.ndarray, session_id: str | None = None
+    ) -> dict[str, Any] | None:
         """Finds a semantically similar query in the cache."""
         if not self._query_cache or query_embedding is None:
             return None
 
         for key, cached_item in self._query_cache.items():
-            cached_embedding = cached_item.get('embedding')
+            cached_embedding = cached_item.get("embedding")
             if cached_embedding is None:
                 continue
 
@@ -154,8 +182,10 @@ class Agent:
                 similarity = self._cosine_similarity(query_embedding, cached_embedding)
 
                 if similarity >= self.semantic_cache_threshold:
-                    logger.info(f"🚀 Semantic cache hit! Similarity: {similarity:.3f} with cached query '{key}'")
-                    return cached_item.get('result')
+                    logger.info(
+                        f"🚀 Semantic cache hit! Similarity: {similarity:.3f} with cached query '{key}'"
+                    )
+                    return cached_item.get("result")
             except ValueError:
                 # In case of shape mismatch, just skip
                 continue
@@ -166,9 +196,11 @@ class Agent:
         """Formats the user query with conversation history for context."""
         if not history:
             return query
-        
-        formatted_history = "\n".join([f"User: {turn['query']}\nAssistant: {turn['answer']}" for turn in history])
-        
+
+        formatted_history = "\n".join(
+            [f"User: {turn['query']}\nAssistant: {turn['answer']}" for turn in history]
+        )
+
         prompt = f"""
 Given the following conversation history, answer the user's latest query. The history provides context for resolving pronouns or follow-up questions.
 
@@ -183,9 +215,9 @@ Latest User Query: "{query}"
     # ---------------- Asynchronous triage using Ollama ----------------
     @traced("agent.triage")
     async def _triage_query_async(self, query: str, history: list) -> str:
-        
+
         logger.debug(f"Starting triage for query: '{query[:100]}...'")
-        
+
         # 1️⃣ Fast routing using precomputed overviews (if available)
         logger.debug("Attempting overview-based routing...")
         routed = self._route_via_overviews(query)
@@ -240,48 +272,100 @@ Respond with JSON: {{"category": "<your_choice>"}}
         results = self.graph_retriever.retrieve(structured_query)
         if not results:
             return self.retrieval_pipeline.run(contextual_query, window_size_override=0)
-        answer = ", ".join([res['details']['node_id'] for res in results])
+        answer = ", ".join([res["details"]["node_id"] for res in results])
         return {"answer": f"From the knowledge graph: {answer}", "source_documents": results}
 
     def _get_cache_key(self, query: str, query_type: str) -> str:
         """Generate a cache key for the query"""
         # Simple cache key based on query and type
         return f"{query_type}:{query.strip().lower()}"
-    
+
     def _cache_result(self, cache_key: str, result: dict[str, Any], session_id: str | None = None):
         """Cache a result with size limit"""
         if len(self._query_cache) >= self._cache_max_size:
             # Remove oldest entry (simple FIFO eviction)
             oldest_key = next(iter(self._query_cache))
             del self._query_cache[oldest_key]
-        
+
         self._query_cache[cache_key] = {
-            'result': result,
-            'timestamp': time.time(),
-            'session_id': session_id
+            "result": result,
+            "timestamp": time.time(),
+            "session_id": session_id,
         }
 
     # ---------------- Public sync API (kept for backwards compatibility) --------------
-    def run(self, query: str, table_name: str = None, session_id: str = None, compose_sub_answers: bool | None = None, query_decompose: bool | None = None, ai_rerank: bool | None = None, context_expand: bool | None = None, verify: bool | None = None, retrieval_k: int | None = None, context_window_size: int | None = None, reranker_top_k: int | None = None, search_type: str | None = None, dense_weight: float | None = None, max_retries: int = 1, event_callback: Callable | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        query: str,
+        table_name: str = None,
+        session_id: str = None,
+        compose_sub_answers: bool | None = None,
+        query_decompose: bool | None = None,
+        ai_rerank: bool | None = None,
+        context_expand: bool | None = None,
+        verify: bool | None = None,
+        retrieval_k: int | None = None,
+        context_window_size: int | None = None,
+        reranker_top_k: int | None = None,
+        search_type: str | None = None,
+        dense_weight: float | None = None,
+        max_retries: int = 1,
+        event_callback: Callable | None = None,
+    ) -> dict[str, Any]:
         """Synchronous helper. If *event_callback* is supplied, important
         milestones will be forwarded to that callable as
 
             event_callback(phase:str, payload:Any)
         """
-        return asyncio.run(self._run_async(query, table_name, session_id, compose_sub_answers, query_decompose, ai_rerank, context_expand, verify, retrieval_k, context_window_size, reranker_top_k, search_type, dense_weight, max_retries, event_callback))
+        return asyncio.run(
+            self._run_async(
+                query,
+                table_name,
+                session_id,
+                compose_sub_answers,
+                query_decompose,
+                ai_rerank,
+                context_expand,
+                verify,
+                retrieval_k,
+                context_window_size,
+                reranker_top_k,
+                search_type,
+                dense_weight,
+                max_retries,
+                event_callback,
+            )
+        )
 
     # ---------------- Main async implementation --------------------------------------
     @traced("agent.run_query")
-    async def _run_async(self, query: str, table_name: str = None, session_id: str = None, compose_sub_answers: bool | None = None, query_decompose: bool | None = None, ai_rerank: bool | None = None, context_expand: bool | None = None, verify: bool | None = None, retrieval_k: int | None = None, context_window_size: int | None = None, reranker_top_k: int | None = None, search_type: str | None = None, dense_weight: float | None = None, max_retries: int = 1, event_callback: Callable | None = None) -> dict[str, Any]:
+    async def _run_async(
+        self,
+        query: str,
+        table_name: str = None,
+        session_id: str = None,
+        compose_sub_answers: bool | None = None,
+        query_decompose: bool | None = None,
+        ai_rerank: bool | None = None,
+        context_expand: bool | None = None,
+        verify: bool | None = None,
+        retrieval_k: int | None = None,
+        context_window_size: int | None = None,
+        reranker_top_k: int | None = None,
+        search_type: str | None = None,
+        dense_weight: float | None = None,
+        max_retries: int = 1,
+        event_callback: Callable | None = None,
+    ) -> dict[str, Any]:
         start_time = time.time()
-        
+
         # Emit analyze event at the start
         if event_callback:
             event_callback("analyze", {"query": query})
-        
+
         # 🚀 NEW: Get conversation history
         history = self.chat_histories.get(session_id, []) if session_id else []
-        
+
         # 🔄 Refresh overviews for this session if available
         # if session_id and session_id != getattr(self, "_current_overview_session", None):
         #     candidate_path = os.path.join("index_store", "overviews", f"{session_id}.jsonl")
@@ -293,15 +377,15 @@ Respond with JSON: {{"category": "<your_choice>"}}
         #         if self._current_overview_session != "GLOBAL":
         #             self._load_overviews(self._global_overview_path)
         #             self._current_overview_session = "GLOBAL"
-        
+
         query_type = await self._triage_query_async(query, history)
         logger.debug(f"Final triage decision: '{query_type}'")
         logger.info(f"Agent Triage Decision: '{query_type}'")
-        
+
         # Create a contextual query that includes history for most operations
         contextual_query = self._format_query_with_history(query, history)
         raw_query = query.strip()
-        
+
         # --- Apply runtime AI reranker override (must happen before any retrieval calls) ---
         if ai_rerank is not None:
             rr_cfg = self.retrieval_pipeline.config.setdefault("reranker", {})
@@ -320,23 +404,25 @@ Respond with JSON: {{"category": "<your_choice>"}}
         if retrieval_k is not None:
             self.retrieval_pipeline.config["retrieval_k"] = retrieval_k
             logger.debug(f"🔍 Retrieval K set to: {retrieval_k}")
-            
+
         if context_window_size is not None:
             self.retrieval_pipeline.config["context_window_size"] = context_window_size
             logger.debug(f"🔍 Context window size set to: {context_window_size}")
-            
+
         if reranker_top_k is not None:
             rr_cfg = self.retrieval_pipeline.config.setdefault("reranker", {})
             rr_cfg["top_k"] = reranker_top_k
             logger.debug(f"🔍 Reranker top K set to: {reranker_top_k}")
-            
+
         if search_type is not None:
             retrieval_cfg = self.retrieval_pipeline.config.setdefault("retrieval", {})
             retrieval_cfg["search_type"] = search_type
             logger.debug(f"🔍 Search type set to: {search_type}")
-            
+
         if dense_weight is not None:
-            dense_cfg = self.retrieval_pipeline.config.setdefault("retrieval", {}).setdefault("dense", {})
+            dense_cfg = self.retrieval_pipeline.config.setdefault("retrieval", {}).setdefault(
+                "dense", {}
+            )
             dense_cfg["weight"] = dense_weight
             logger.debug(f"🔍 Dense search weight set to: {dense_weight}")
 
@@ -358,7 +444,12 @@ Respond with JSON: {{"category": "<your_choice>"}}
                 if cached_result:
                     # Update history even on cache hit
                     if session_id:
-                        history.append({"query": query, "answer": cached_result.get('answer', 'Cached answer not found.')})
+                        history.append(
+                            {
+                                "query": query,
+                                "answer": cached_result.get("answer", "Cached answer not found."),
+                            }
+                        )
                         self.chat_histories[session_id] = history
                     return cached_result
 
@@ -391,13 +482,13 @@ Respond with JSON: {{"category": "<your_choice>"}}
 
             final_answer = await _run_stream()
             result = {"answer": final_answer, "source_documents": []}
-        
-        elif query_type == "graph_query" and hasattr(self, 'graph_retriever'):
+
+        elif query_type == "graph_query" and hasattr(self, "graph_retriever"):
             logger.debug("Executing GRAPH_QUERY path")
             result = self._run_graph_query(query, history)
 
         # --- RAG Query Processing with Optional Query Decomposition ---
-        else: # Default to rag_query
+        else:  # Default to rag_query
             logger.debug(f"Executing RAG_QUERY path (query_type='{query_type}')")
             query_decomp_config = self.pipeline_configs.get("query_decomposition", {})
             decomp_enabled = query_decomp_config.get("enabled", False)
@@ -414,23 +505,29 @@ Respond with JSON: {{"category": "<your_choice>"}}
                     event_callback("decomposition", {"sub_queries": sub_queries})
                 logger.debug(f"Original query: '{query}' (Contextual: '{contextual_query}')")
                 logger.info(f"Decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
-                
+
                 # Emit retrieval_started event before any retrievals
                 if event_callback:
                     event_callback("retrieval_started", {"count": len(sub_queries)})
-                
+
                 # If decomposition produced only a single sub-query, skip the
                 # parallel/composition machinery for efficiency.
                 if len(sub_queries) == 1:
-                    logger.debug("Only one sub-query after decomposition; using direct retrieval path")
-                    with traced_span("agent.retrieval", table_name=str(table_name), query_type="single_subquery") as retrieval_span:
+                    logger.debug(
+                        "Only one sub-query after decomposition; using direct retrieval path"
+                    )
+                    with traced_span(
+                        "agent.retrieval", table_name=str(table_name), query_type="single_subquery"
+                    ) as retrieval_span:
                         result = self.retrieval_pipeline.run(
                             sub_queries[0],
                             table_name,
                             0 if context_expand is False else None,
-                            event_callback=event_callback
+                            event_callback=event_callback,
                         )
-                        retrieval_span.set_attribute("num_source_docs", len(result.get("source_documents", [])))
+                        retrieval_span.set_attribute(
+                            "num_source_docs", len(result.get("source_documents", []))
+                        )
                     if event_callback:
                         event_callback("single_query_result", result)
                     # Emit retrieval_done and rerank_done for single sub-query
@@ -439,7 +536,9 @@ Respond with JSON: {{"category": "<your_choice>"}}
                         event_callback("rerank_started", {"count": 1})
                         event_callback("rerank_done", {"count": 1})
                 else:
-                    compose_from_sub_answers = query_decomp_config.get("compose_from_sub_answers", True)
+                    compose_from_sub_answers = query_decomp_config.get(
+                        "compose_from_sub_answers", True
+                    )
                     if compose_sub_answers is not None:
                         compose_from_sub_answers = compose_sub_answers
 
@@ -464,12 +563,22 @@ Respond with JSON: {{"category": "<your_choice>"}}
                             if event_callback is None:
                                 return
                             if ev_type == "token":
-                                event_callback("sub_query_token", {"index": idx, "text": payload.get("text", ""), "question": sub_queries[idx]})
+                                event_callback(
+                                    "sub_query_token",
+                                    {
+                                        "index": idx,
+                                        "text": payload.get("text", ""),
+                                        "question": sub_queries[idx],
+                                    },
+                                )
                             else:
                                 event_callback(ev_type, payload)
+
                         return _cb
 
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(sub_queries))) as executor:
+                    with concurrent.futures.ThreadPoolExecutor(
+                        max_workers=min(3, len(sub_queries))
+                    ) as executor:
                         future_to_query = {
                             executor.submit(
                                 self.retrieval_pipeline.run,
@@ -488,29 +597,36 @@ Respond with JSON: {{"category": "<your_choice>"}}
                                 logger.debug(f"✅ Sub-Query {i+1} completed: '{sub_query}'")
 
                                 if event_callback:
-                                    event_callback("sub_query_result", {
-                                        "index": i,
-                                        "query": sub_query,
-                                        "answer": sub_result.get("answer", ""),
-                                        "source_documents": sub_result.get("source_documents", []),
-                                    })
+                                    event_callback(
+                                        "sub_query_result",
+                                        {
+                                            "index": i,
+                                            "query": sub_query,
+                                            "answer": sub_result.get("answer", ""),
+                                            "source_documents": sub_result.get(
+                                                "source_documents", []
+                                            ),
+                                        },
+                                    )
 
                                 if compose_from_sub_answers:
-                                    sub_answers.append({
-                                        "question": sub_query,
-                                        "answer": sub_result.get("answer", "")
-                                    })
+                                    sub_answers.append(
+                                        {
+                                            "question": sub_query,
+                                            "answer": sub_result.get("answer", ""),
+                                        }
+                                    )
                                     # Keep up to 5 citations per sub-query for traceability
                                     for doc in sub_result.get("source_documents", [])[:5]:
-                                        if doc['chunk_id'] not in citations_seen:
+                                        if doc["chunk_id"] not in citations_seen:
                                             all_source_docs.append(doc)
-                                            citations_seen.add(doc['chunk_id'])
+                                            citations_seen.add(doc["chunk_id"])
                                 else:
                                     # Aggregate unique docs (single-stage path)
-                                    for doc in sub_result.get('source_documents', []):
-                                        if doc['chunk_id'] not in citations_seen:
+                                    for doc in sub_result.get("source_documents", []):
+                                        if doc["chunk_id"] not in citations_seen:
                                             all_source_docs.append(doc)
-                                            citations_seen.add(doc['chunk_id'])
+                                            citations_seen.add(doc["chunk_id"])
                             except Exception as e:
                                 logger.error(f"❌ Sub-Query {i+1} failed: '{sub_query}' - {e}")
 
@@ -563,86 +679,113 @@ FINAL ANSWER:
 
                         final_answer = "".join(answer_parts) or "Unable to generate an answer."
 
-                        result = {
-                            "answer": final_answer,
-                            "source_documents": all_source_docs
-                        }
+                        result = {"answer": final_answer, "source_documents": all_source_docs}
                         if event_callback:
                             event_callback("final_answer", result)
                     else:
-                        logger.debug(f"Aggregated {len(all_source_docs)} unique documents from all sub-queries")
+                        logger.debug(
+                            f"Aggregated {len(all_source_docs)} unique documents from all sub-queries"
+                        )
 
                         if all_source_docs:
-                            aggregated_context = "\n\n".join([doc['text'] for doc in all_source_docs])
-                            final_answer = self.retrieval_pipeline._synthesize_final_answer(contextual_query, aggregated_context)
-                            result = {
-                                "answer": final_answer,
-                                "source_documents": all_source_docs
-                            }
+                            aggregated_context = "\n\n".join(
+                                [doc["text"] for doc in all_source_docs]
+                            )
+                            final_answer = self.retrieval_pipeline._synthesize_final_answer(
+                                contextual_query, aggregated_context
+                            )
+                            result = {"answer": final_answer, "source_documents": all_source_docs}
                             if event_callback:
                                 event_callback("final_answer", result)
                         else:
                             result = {
                                 "answer": "I could not find relevant information to answer your question.",
-                                "source_documents": []
+                                "source_documents": [],
                             }
                             if event_callback:
                                 event_callback("final_answer", result)
             else:
                 # Standard retrieval (single-query)
-                retrieved_docs = (self.retrieval_pipeline.retriever.retrieve(
-                    text_query=contextual_query,
-                    table_name=table_name or self.retrieval_pipeline.storage_config["text_table_name"],
-                    k=self.retrieval_pipeline.config.get("retrieval_k", 10),
-                ) if hasattr(self.retrieval_pipeline, "retriever") and self.retrieval_pipeline.retriever else [])
+                retrieved_docs = (
+                    self.retrieval_pipeline.retriever.retrieve(
+                        text_query=contextual_query,
+                        table_name=table_name
+                        or self.retrieval_pipeline.storage_config["text_table_name"],
+                        k=self.retrieval_pipeline.config.get("retrieval_k", 10),
+                    )
+                    if hasattr(self.retrieval_pipeline, "retriever")
+                    and self.retrieval_pipeline.retriever
+                    else []
+                )
 
                 logger.debug("\nOriginal retrieval order ===")
                 for i, d in enumerate(retrieved_docs[:10]):
-                    snippet = (d.get('text','') or '')[:200].replace('\n',' ')
-                    logger.debug(f"Orig[{i}] id={d.get('chunk_id')} dist={d.get('_distance','') or d.get('score','')}  {snippet}")
+                    snippet = (d.get("text", "") or "")[:200].replace("\n", " ")
+                    logger.debug(
+                        f"Orig[{i}] id={d.get('chunk_id')} dist={d.get('_distance','') or d.get('score','')}  {snippet}"
+                    )
 
-                with traced_span("agent.retrieval", table_name=str(table_name), query_type="direct") as retrieval_span:
-                    result = self.retrieval_pipeline.run(contextual_query, table_name, 0 if context_expand is False else None, event_callback=event_callback)
-                    retrieval_span.set_attribute("num_source_docs", len(result.get("source_documents", [])))
+                with traced_span(
+                    "agent.retrieval", table_name=str(table_name), query_type="direct"
+                ) as retrieval_span:
+                    result = self.retrieval_pipeline.run(
+                        contextual_query,
+                        table_name,
+                        0 if context_expand is False else None,
+                        event_callback=event_callback,
+                    )
+                    retrieval_span.set_attribute(
+                        "num_source_docs", len(result.get("source_documents", []))
+                    )
 
                 # After run, result['source_documents'] is reranked list
-                reranked_docs = result.get('source_documents', [])
+                reranked_docs = result.get("source_documents", [])
                 logger.debug("\nReranked docs order ===")
                 for i, d in enumerate(reranked_docs[:10]):
-                    snippet = (d.get('text','') or '')[:200].replace('\n',' ')
-                    logger.debug(f"ReRank[{i}] id={d.get('chunk_id')} score={d.get('rerank_score','')} {snippet}")
-        
+                    snippet = (d.get("text", "") or "")[:200].replace("\n", " ")
+                    logger.debug(
+                        f"ReRank[{i}] id={d.get('chunk_id')} score={d.get('rerank_score','')} {snippet}"
+                    )
+
         # Verification step (simplified for now) - Skip in fast mode
         verification_enabled = self.pipeline_configs.get("verification", {}).get("enabled", True)
         if verify is not None:
             verification_enabled = verify
-            
+
         if verification_enabled and result.get("source_documents"):
-            context_str = "\n".join([doc['text'] for doc in result['source_documents']])
-            with traced_span("agent.verification", num_source_docs=len(result['source_documents'])) as verify_span:
-                verification = await self.verifier.verify_async(contextual_query, context_str, result['answer'])
+            context_str = "\n".join([doc["text"] for doc in result["source_documents"]])
+            with traced_span(
+                "agent.verification", num_source_docs=len(result["source_documents"])
+            ) as verify_span:
+                verification = await self.verifier.verify_async(
+                    contextual_query, context_str, result["answer"]
+                )
                 verify_span.set_attribute("confidence_score", verification.confidence_score)
                 verify_span.set_attribute("is_grounded", verification.is_grounded)
-            
+
             score = verification.confidence_score
 
             # Only include confidence details if we received a non-zero score (0 usually means JSON parse failure)
             if score > 0:
-                result['answer'] += f" [Confidence: {score}%]"
+                result["answer"] += f" [Confidence: {score}%]"
                 # Add warning only when the verifier explicitly reported low confidence / not grounded
                 if (not verification.is_grounded) or score < 50:
-                    result['answer'] += f" [Warning: Low confidence. Groundedness: {verification.is_grounded}]"
+                    result[
+                        "answer"
+                    ] += f" [Warning: Low confidence. Groundedness: {verification.is_grounded}]"
             else:
                 # Skip appending any verifier note – 0 likely indicates a parser error
-                logger.warning("⚠️  Verifier returned 0 confidence – likely JSON parse error; omitting tags.")
+                logger.warning(
+                    "⚠️  Verifier returned 0 confidence – likely JSON parse error; omitting tags."
+                )
         else:
             logger.debug("🚀 Skipping verification for speed or lack of sources")
-        
+
         # 🚀 NEW: Update history
         if session_id:
-            history.append({"query": query, "answer": result['answer']})
+            history.append({"query": query, "answer": result["answer"]})
             self.chat_histories[session_id] = history
-            
+
         # 🚀 OPTIMIZED: Cache the result for future queries
         if query_type != "direct_answer" and query_embedding is not None:
             cache_key = raw_query  # Key is for logging/debugging
@@ -651,10 +794,10 @@ FINAL ANSWER:
                 "result": result,
                 "session_id": session_id,
             }
-        
+
         total_time = time.time() - start_time
         logger.info(f"🚀 Total query processing time: {total_time:.2f}s")
-        
+
         return result
 
     # ------------------------------------------------------------------
@@ -664,7 +807,7 @@ FINAL ANSWER:
         if not self.doc_overviews:
             logger.debug("No document overviews available, returning None")
             return None
-        
+
         logger.debug(f"Found {len(self.doc_overviews)} document overviews, using LLM routing...")
 
         # Keep prompt concise: if more than 40 overviews, take first 40
@@ -686,7 +829,7 @@ If A or B → {{"category": "direct_answer"}}
 If C → {{"category": "rag_query"}}
 
 Response:"""
-        
+
         resp = self.llm_client.generate_completion(
             model=self.ollama_config["generation_model"], prompt=router_prompt, format="json"
         )

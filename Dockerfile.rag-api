@@ -1,31 +1,47 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1
 
-# Set working directory
+# --- Stage 1: builder ---
+# build-essential (gcc, etc) is needed to compile some of the heavier
+# ML dependencies from source when a pre-built wheel isn't available for
+# this platform. It's a substantial amount of disk space (compiler
+# toolchain) that has NO reason to exist in the final runtime image -
+# multi-stage build is what actually removes it, not just reorganizing
+# Dockerfile syntax.
+FROM python:3.11-slim AS builder
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies (using Docker-specific requirements)
 COPY requirements-docker.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Copy RAG system code and backend dependencies
+# --- Stage 2: runtime ---
+FROM python:3.11-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 1000 appuser
+WORKDIR /app
+
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH=/home/appuser/.local/bin:$PATH
+ENV PYTHONPATH=/app
+
 COPY rag_system/ ./rag_system/
 COPY backend/ ./backend/
 
-# Create necessary directories
-RUN mkdir -p lancedb index_store shared_uploads logs
+RUN mkdir -p lancedb index_store shared_uploads logs && chown -R appuser:appuser /app
 
-# Expose port
+USER appuser
+
 EXPOSE 8001
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8001/models || exit 1
 
-# Run the RAG API server
-CMD ["python", "-m", "rag_system.api_server"] 
+CMD ["python", "-m", "rag_system.api_server"]

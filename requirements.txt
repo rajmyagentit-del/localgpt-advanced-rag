@@ -45,3 +45,4 @@ fastapi
 uvicorn[standard]
 python-multipart
 pyjwt
+rq

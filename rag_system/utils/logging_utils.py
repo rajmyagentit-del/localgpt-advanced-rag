@@ -132,4 +132,4 @@ def log_retrieval_results(results: list[dict], k: int) -> None:
     logger.info("-" * len(header))
     for row in results[:k]:
         preview = shorten(row.get("text", ""), width=60, placeholder="…")
-        logger.info("%s %-7.3f %s", str(row.get("chunk_id"))[:12], row.get("score", 0.0), preview) 
+        logger.info("%s %-7.3f %s", str(row.get("chunk_id"))[:12], row.get("score", 0.0), preview)

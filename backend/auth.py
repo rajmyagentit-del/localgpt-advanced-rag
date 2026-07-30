@@ -29,10 +29,10 @@ import hashlib
 import hmac
 import logging
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
-from fastapi import Depends, HTTPException, Header
+from fastapi import Header, HTTPException
 
 from rag_system.config import settings
 
@@ -42,6 +42,7 @@ _PBKDF2_ITERATIONS = 600_000  # OWASP-recommended minimum as of 2023 for PBKDF2-
 
 
 # --- Password hashing ---
+
 
 def hash_password(password: str) -> tuple[str, str]:
     """Returns (password_hash, salt), both hex-encoded strings suitable
@@ -64,8 +65,9 @@ def verify_password(password: str, password_hash: str, salt: str) -> bool:
 
 # --- JWT tokens ---
 
+
 def create_access_token(user_id: str, email: str) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": user_id,
         "email": email,
@@ -82,6 +84,7 @@ def decode_access_token(token: str) -> dict:
 
 
 # --- FastAPI dependencies ---
+
 
 def get_current_user(authorization: str | None = Header(default=None)) -> dict:
     """

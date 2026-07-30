@@ -1,0 +1,24 @@
+# Dependencies for backend/app.py (the FastAPI backend) ONLY.
+#
+# WHY THIS FILE EXISTS SEPARATELY FROM requirements-docker.txt:
+# the backend service (session/index CRUD, auth, chat routing) never
+# directly imports torch/transformers/docling/etc - those are only used
+# by the RAG API service (rag_system/api_server.py) for actual document
+# processing and embedding. Before this split, both services shared one
+# requirements file that included the full multi-GB ML stack, meaning
+# the lightweight backend image was needlessly bloated by everything the
+# heavy rag-api image needed. This keeps the backend image small and the
+# build fast.
+requests
+python-dotenv
+pydantic-settings
+fastapi
+uvicorn[standard]
+python-multipart
+pyjwt
+tenacity
+redis
+rq
+cachetools
+opentelemetry-api
+opentelemetry-sdk

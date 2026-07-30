@@ -39,7 +39,8 @@ Configuration (environment variables):
 import contextlib
 import logging
 import os
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource

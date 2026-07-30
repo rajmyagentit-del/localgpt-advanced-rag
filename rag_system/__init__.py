@@ -51,14 +51,16 @@ def _hf_auto_login() -> None:
 
     import os
 
-    token: Optional[str] = (
+    token: str | None = (
         os.getenv("HF_TOKEN")
         or os.getenv("HUGGINGFACE_HUB_TOKEN")
         or os.getenv("HUGGING_FACE_HUB_TOKEN")
     )
 
     if not token:
-        logging.getLogger(__name__).debug("No Hugging Face token found in env; proceeding anonymously.")
+        logging.getLogger(__name__).debug(
+            "No Hugging Face token found in env; proceeding anonymously."
+        )
         return
 
     try:
@@ -73,4 +75,4 @@ def _hf_auto_login() -> None:
 
 
 # Run on module import
-_hf_auto_login() 
+_hf_auto_login()

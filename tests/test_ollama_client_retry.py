@@ -7,7 +7,7 @@ stops retrying once it succeeds, or gives up after 3 attempts) without
 needing a real flaky network.
 """
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests

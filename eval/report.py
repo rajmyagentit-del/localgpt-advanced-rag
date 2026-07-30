@@ -11,7 +11,6 @@ testable without any LLM/network dependency, unlike the scoring itself.
 from dataclasses import dataclass, field
 from statistics import mean
 
-
 # Default thresholds - a metric average below this fails the suite.
 # These are intentionally conservative starting points; tighten them as
 # you build confidence in your actual RAG pipeline's real performance.
@@ -88,7 +87,7 @@ class EvalReport:
     def to_markdown(self) -> str:
         """Human-readable summary, suitable for a PR comment or console output."""
         lines = [
-            f"# RAG Evaluation Report",
+            "# RAG Evaluation Report",
             "",
             f"**Overall: {'✅ PASSED' if self.passed else '❌ FAILED'}**",
             f"- Cases evaluated: {len(self.case_results)}",

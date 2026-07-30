@@ -1,31 +1,47 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1
 
-# Set working directory
+# --- Stage 1: builder ---
+# Installs Python dependencies into an isolated location. Kept separate
+# from the runtime stage so build tooling / pip cache never ends up in
+# the final image, and so this layer is cached independently of app
+# code changes (editing backend/app.py shouldn't force a full
+# dependency reinstall).
+FROM python:3.11-slim AS builder
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+COPY requirements-backend.txt ./requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# --- Stage 2: runtime ---
+# Only what's needed to actually RUN the app: the installed packages
+# from the builder stage, curl for the HEALTHCHECK, and the app code.
+# No pip cache, no build tooling, nothing from requirements resolution.
+FROM python:3.11-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies (using Docker-specific requirements)
-COPY requirements-docker.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Run as a non-root user - a real, checkable hardening improvement over
+# the previous image, which ran as root by default.
+RUN useradd --create-home --uid 1000 appuser
+WORKDIR /app
 
-# Copy backend code and dependencies
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH=/home/appuser/.local/bin:$PATH
+ENV PYTHONPATH=/app
+
 COPY backend/ ./backend/
 COPY rag_system/ ./rag_system/
 
-# Create necessary directories and initialize database
-RUN mkdir -p shared_uploads logs backend
+RUN mkdir -p shared_uploads logs && chown -R appuser:appuser /app
 
-# Expose port
+USER appuser
+
 EXPOSE 8000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/v1/health || exit 1
 
-# Run the backend server
-WORKDIR /app/backend
-CMD ["python", "server.py"]  
+CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]

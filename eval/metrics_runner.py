@@ -31,8 +31,8 @@ And a running Ollama server with a capable model pulled, e.g.:
 from dataclasses import dataclass
 
 from openai import AsyncOpenAI
-from ragas.llms import llm_factory
 from ragas.embeddings import OpenAIEmbeddings
+from ragas.llms import llm_factory
 from ragas.metrics.collections import (
     AnswerRelevancy,
     ContextPrecision,

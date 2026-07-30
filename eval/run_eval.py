@@ -48,7 +48,9 @@ async def run_evaluation(agent, config: RunConfig | None = None) -> list[CaseRes
         try:
             answer, retrieved_contexts = await _get_agent_response(agent, case.question)
         except Exception as e:
-            results.append(CaseResult(question=case.question, scores={}, error=f"Agent run failed: {e}"))
+            results.append(
+                CaseResult(question=case.question, scores={}, error=f"Agent run failed: {e}")
+            )
             continue
 
         result = await score_case(

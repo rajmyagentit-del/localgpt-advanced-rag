@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from backend.validation import is_valid_id, validate_chat_message, MAX_MESSAGE_LENGTH
+from backend.validation import MAX_MESSAGE_LENGTH, is_valid_id, validate_chat_message
 
 
 class TestIsValidId:

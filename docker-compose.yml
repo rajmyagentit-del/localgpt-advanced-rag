@@ -1,4 +1,25 @@
 services:
+  # Redis - powers the distributed semantic cache (Improvement #15).
+  # Optional infrastructure: the app falls back to an in-process cache
+  # automatically if this isn't reachable, so it's included here for
+  # anyone who wants the multi-instance-safe behavior, not because it's
+  # strictly required to run the app.
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - rag-network
+
   # Ollama service for LLM inference (optional - can use host Ollama instead)
   ollama:
     image: ollama/ollama:latest
@@ -57,17 +78,42 @@ services:
       - NODE_ENV=production
       - RAG_API_URL=http://rag-api:8001
       - OLLAMA_HOST=${OLLAMA_HOST:-http://172.18.0.1:11434}
+      - REDIS_URL=redis://redis:6379
+      # SECURITY: set a real JWT_SECRET_KEY in a .env file or your
+      # deployment platform's secrets manager - do NOT rely on the
+      # insecure default outside local development. See rag_system/config.py.
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-only-insecure-secret-change-me}
     volumes:
-      - ./backend:/app/backend
       - ./shared_uploads:/app/shared_uploads
     depends_on:
       rag-api:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # Background worker (Improvement #14) - processes async indexing jobs
+  # enqueued by the backend. Uses the same image/Dockerfile as backend
+  # since it needs the same dependencies (backend.tasks) - just a
+  # different CMD, overridden below.
+  indexing-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: rag-indexing-worker
+    command: ["python", "-m", "backend.worker"]
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - rag-network
@@ -97,6 +143,8 @@ services:
 
 volumes:
   ollama_data:
+    driver: local
+  redis_data:
     driver: local
 
 networks:
