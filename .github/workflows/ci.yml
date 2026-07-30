@@ -1,0 +1,116 @@
+name: CI
+
+# Runs on every PR and every push to main - this is what turns "I ran
+# the tests on my machine" into an actual, verifiable, un-fakeable
+# signal that a hiring manager (or anyone else) can check by looking at
+# the green checkmark on a PR, without having to trust anyone's word
+# for it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install lint tools
+        run: pip install ruff black
+      # Scoped to the paths this fork actually maintains, matching the
+      # mypy job below. The rest of the repo is pre-existing code from
+      # the original project, carried over as-is by the fork - see
+      # pyproject.toml's [tool.ruff] section and the README's "About
+      # This Fork" section for why this is an intentional, incremental
+      # choice rather than an oversight.
+      - name: Ruff
+        run: >
+          ruff check
+          backend/ eval/ tests/
+          rag_system/config.py rag_system/observability.py rag_system/__init__.py
+          rag_system/agent/ rag_system/utils/logging_utils.py
+      - name: Black (check only, no reformatting)
+        run: >
+          black --check
+          backend/ eval/ tests/
+          rag_system/config.py rag_system/observability.py rag_system/__init__.py
+          rag_system/agent/ rag_system/utils/logging_utils.py
+
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install type-check dependencies
+        run: |
+          pip install mypy pydantic pydantic-settings
+      - name: mypy
+        # Scoped to the same modules as the pre-commit config - see
+        # pyproject.toml's [tool.mypy] section for why this isn't the
+        # whole codebase yet.
+        run: mypy rag_system/config.py rag_system/agent/ rag_system/utils/
+
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        # NOTE: intentionally NOT installing the full rag_system ML stack
+        # (torch, transformers, docling, etc - see requirements-docker.txt)
+        # here. This project's test suite is deliberately designed to run
+        # fast, on pure logic, without needing multi-GB ML downloads in
+        # CI - see tests/conftest.py's docstring for the stubbing
+        # approach that makes this possible. A separate, slower
+        # integration-test job would be the natural place for
+        # ML-stack-dependent tests, if/when those are added.
+        run: |
+          pip install -r requirements.txt
+      - name: Run test suite
+        run: |
+          PYTHONPATH=. python -m pytest tests/ -v
+      - name: Run eval-suite unit tests (report/aggregation logic only)
+        run: |
+          PYTHONPATH=. python -m pytest tests/test_eval_report.py -v
+
+  docker-build:
+    name: Build Docker images
+    runs-on: ubuntu-latest
+    # Only runs after lint/typecheck/test pass - no point spending CI
+    # minutes building images for code that doesn't even pass tests.
+    needs: [lint, typecheck, test]
+    strategy:
+      matrix:
+        image:
+          - dockerfile: Dockerfile.backend
+            tag: localgpt-backend
+          - dockerfile: Dockerfile.rag-api
+            tag: localgpt-rag-api
+          - dockerfile: Dockerfile.frontend
+            tag: localgpt-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.tag }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          tags: ${{ matrix.tag }}:ci
+          # Cache layers between CI runs - keeps rebuilds fast when only
+          # app code changed, not dependencies.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

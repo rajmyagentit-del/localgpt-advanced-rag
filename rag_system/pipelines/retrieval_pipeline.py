@@ -256,7 +256,7 @@ ORIGINAL QUESTION: "{query}"
 
         return "".join(answer_parts)
 
-    def run(self, query: str, table_name: str = None, window_size_override: Optional[int] = None, event_callback=None) -> Dict[str, Any]:
+    def run(self, query: str, table_name: str | None = None, window_size_override: Optional[int] = None, event_callback=None) -> Dict[str, Any]:
         start_time = time.time()
         retrieval_k = self.config.get("retrieval_k", 10)
 

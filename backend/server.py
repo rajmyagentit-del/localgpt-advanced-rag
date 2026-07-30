@@ -1,3 +1,14 @@
+"""
+DEPRECATED (Improvement #9 - FastAPI migration): this raw http.server-
+based backend has been replaced by backend/app.py (FastAPI). It is kept
+in the repository for historical reference and comparison only - it is
+NOT used by any Dockerfile, docker-compose service, or other entrypoint
+anymore. See backend/app.py's module docstring for what replaced it and
+why. This file is intentionally excluded from linting/type-checking in
+CI (see .github/workflows/ci.yml and pyproject.toml) since it's no
+longer actively maintained.
+"""
+
 import cgi
 import http.server
 import json

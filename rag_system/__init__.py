@@ -37,7 +37,6 @@ setup_tracing()
 # ---------------------------------------------------------
 # Authenticate to Hugging Face Hub if a token is provided
 # ---------------------------------------------------------
-from typing import Optional
 
 
 def _hf_auto_login() -> None:

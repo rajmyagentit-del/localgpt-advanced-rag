@@ -6,6 +6,7 @@
 <a href="https://trendshift.io/repositories/2947" target="_blank"><img src="https://trendshift.io/api/badge/repositories/2947" alt="PromtEngineer%2FlocalGPT | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </p>
 
+[![CI](https://github.com/rajmyagentit-del/localgpt-advanced-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/rajmyagentit-del/localgpt-advanced-rag/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/PromtEngineer/localGPT?style=flat-square)](https://github.com/PromtEngineer/localGPT/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/PromtEngineer/localGPT?style=flat-square)](https://github.com/PromtEngineer/localGPT/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/PromtEngineer/localGPT?style=flat-square)](https://github.com/PromtEngineer/localGPT/issues)
@@ -42,6 +43,14 @@ This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer
 | 8 | Rate limiting | Per-IP rate limiting on `/chat`-type and upload endpoints (in-memory, fixed-window), returning proper `429` + `Retry-After` headers. |
 | 12 | Observability (tracing) | Every query is now traced end-to-end (triage → retrieval → verification) with [OpenTelemetry](https://opentelemetry.io/) - latency and key attributes (query type, doc counts, confidence scores) per step, viewable via console output by default (`LOG_LEVEL`-style env var control: `OTEL_TRACES_EXPORTER=console\|file\|otlp\|none`). Deliberately **not** defaulted to a cloud SaaS backend (e.g. Langfuse Cloud) - that would work against this project's "100% local, private" positioning. Point it at Langfuse/Jaeger/any OTLP backend later via `OTEL_EXPORTER_OTLP_ENDPOINT` without touching the instrumentation code. |
 | 13 | Automated RAG evaluation (`eval/`) | Ragas-based suite scoring faithfulness, answer relevancy, context precision, and context recall against a golden question/reference-answer dataset, run through the REAL agent (not mocked). Judged by a **local Ollama model** via the OpenAI-compatible client (`openai` package, no LangChain needed) - consistent with the local-first ethos. See `eval/requirements.txt` for a real, documented dependency pin needed to make `ragas` import cleanly against the current LangChain ecosystem. |
+| 9 | FastAPI migration | `backend/app.py` replaces the raw `http.server`-based backend entirely - 21 routes, automatic request validation via Pydantic, interactive docs at `/docs`. Business logic extracted into `backend/chat_service.py` and reused, not rewritten. `backend/server.py` kept for historical reference, marked deprecated. |
+| 16 | API versioning | Every route lives under `/v1/` - came essentially free with the FastAPI migration. |
+| 10 | JWT auth + session ownership | `backend/auth.py`: stdlib password hashing (no bcrypt dependency), JWT tokens. New `users` table + nullable `user_id` columns (backward-compatible with pre-auth data). Verified with real cross-user access blocking, not just unit tests of the ownership-check function. |
+| 17 | Retry/backoff | Scoped retry on Ollama HTTP calls and LanceDB's `get_table()` - narrowly targeted (only `OSError` for LanceDB, since it's a local embedded DB where most failures are real bugs a retry wouldn't fix). |
+| 15 | Redis-backed semantic cache | `rag_system/agent/semantic_cache.py` - drop-in `MutableMapping` replacement for the original in-process cache, shared across instances when Redis is configured, falls back automatically when it isn't. |
+| 14 | Async indexing queue | RQ (Redis Queue)-based background indexing - `POST /v1/sessions/{id}/index` returns immediately with a job ID instead of blocking for minutes, falls back to the original synchronous behavior if Redis isn't available. |
+| 18 | Docker hardening | All three Dockerfiles converted to genuine multi-stage builds (build tooling no longer ships in the runtime image), non-root users, Next.js standalone output mode. Honest limitation: verified via YAML validation and manual review, not an actual `docker compose build` (no Docker daemon in the environment this was built in). |
+| 11 | CI/CD (GitHub Actions) | `.github/workflows/ci.yml`: lint, type-check, test, and matrix Docker builds on every PR. Lint/type-check scoped to the paths this fork actually maintains (see `pyproject.toml`) rather than the whole legacy repo - setting this up is what surfaced the two bugs described below. |
 
 **A real bug found along the way:** while running the new `ruff --fix` auto-formatter (item 4) against the codebase, it silently rewrote `Optional[callable]` to `callable | None` in `agent/loop.py` - which looks equivalent but isn't (`callable`, the builtin function, doesn't support the `|` operator the way an actual type does), and broke the module at import time. My new test suite (item 5) caught it immediately on the next run. Fixed by using `typing.Callable` instead. This is exactly why automated fixes get re-tested, not just trusted.
 
@@ -49,7 +58,13 @@ This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer
 
 **A third, from building the eval suite (item 13):** the latest `ragas` release fails to import at all against the current LangChain ecosystem (`ImportError: cannot import name 'ChatVertexAI'` - a symbol removed from a newer `langchain-community` than `ragas` expects). Pinning `langchain-community==0.3.19` (see `eval/requirements.txt`) fixes it - verified in an isolated environment rather than blindly forcing the pin into the main project's dependencies. Separately, my first attempt at wiring Ragas to a local Ollama model used a synchronous `OpenAI` client while calling the async `.ascore()` methods - it failed immediately and clearly ("Cannot use agenerate() with a synchronous client"), fixed by switching to `AsyncOpenAI`.
 
-Three real, verified bugs, three real fixes - this is the actual, honest pattern of doing this kind of work, not a highlight reel.
+**Two more, from setting up CI (item 11) - these were the most serious ones:**
+1. `backend/database.py`'s `inspect_and_populate_index_metadata()` had a redundant local `from datetime import datetime` deep inside the function, which shadowed the module-level import for the *entire* function scope - causing a real `UnboundLocalError` on every single call, silently swallowed by a bare `except: pass` a few lines later. Caught by `ruff` (rule F823), reproduced with a real test *before* fixing it, confirmed fixed *after*.
+2. `rag_system/agent/loop.py`'s LLM-based document router computed the real document overviews into a variable, then never used it - the prompt sent to the LLM hardcoded a generic placeholder ("Invoices, DeepSeek-V3 research papers", clearly leftover demo data) instead. This meant the "intelligent" routing decision was never actually seeing what documents exist, for any project whose content isn't literally invoices and DeepSeek papers. Caught by `ruff` (rule F841, unused variable) - the unused variable was the tell.
+
+Both are covered by permanent regression tests (`tests/test_regressions.py`) and were pre-existing in the original codebase, not introduced by this fork.
+
+Five real, verified bugs, five real fixes - this is the actual, honest pattern of doing this kind of work, not a highlight reel.
 
 See the "Roadmap" section further down this README for what's planned next.
 
@@ -916,7 +931,7 @@ Exits with status code 1 if any metric average falls below its threshold (see `e
 This fork is being built out as a portfolio project, following a 23-item production-readiness roadmap (Easy → Medium → Hard). Current status:
 
 - ✅ **Easy tier (8/8 complete):** structured logging, centralized config, real health checks, lint/format/type tooling, unit tests, input validation, this README, rate limiting.
-- 🟡 **Medium tier (2/10):** ✅ observability/tracing, ✅ automated RAG evaluation. Remaining: FastAPI migration, auth, CI/CD, async indexing queue, Redis-backed cache, API versioning, retry/backoff, Docker hardening.
+- ✅ **Medium tier (10/10 complete):** observability/tracing, automated RAG evaluation, FastAPI migration, API versioning, JWT auth + session ownership, retry/backoff, Redis-backed cache, async indexing queue, Docker hardening, CI/CD.
 - ⬜ **Hard tier (0/5):** completing the GraphRAG feature end-to-end, PostgreSQL migration, multi-tenant isolation, a live evaluation/regression dashboard, a self-correcting agentic verification loop.
 
 ---

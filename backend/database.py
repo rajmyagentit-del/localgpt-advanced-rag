@@ -2,7 +2,7 @@ import json
 import logging
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -541,7 +541,7 @@ class ChatDatabase:
                     db_path = settings.lancedb_path
                     ldb = LanceDBManager(db_path)
                     db = ldb.db
-                    if hasattr(db, "table_names") and vector_table_name in db.table_names():
+                    if hasattr(db, "list_tables") and vector_table_name in db.list_tables().tables:
                         db.drop_table(vector_table_name)
                         logger.info(f"🚮 Dropped LanceDB table '{vector_table_name}'")
                 except Exception as e:
@@ -598,8 +598,8 @@ class ChatDatabase:
 
                     # Check if table exists
                     if (
-                        not hasattr(ldb.db, "table_names")
-                        or vector_table_name not in ldb.db.table_names()
+                        not hasattr(ldb.db, "list_tables")
+                        or vector_table_name not in ldb.db.list_tables().tables
                     ):
                         # Table doesn't exist - this means the index was never properly built
                         inferred_metadata = {
@@ -607,7 +607,9 @@ class ChatDatabase:
                             "issue": "Vector table not found - index may not have been built properly",
                             "vector_table_expected": vector_table_name,
                             "available_tables": (
-                                list(ldb.db.table_names()) if hasattr(ldb.db, "table_names") else []
+                                list(ldb.db.list_tables().tables)
+                                if hasattr(ldb.db, "list_tables")
+                                else []
                             ),
                             "metadata_inferred_at": datetime.now().isoformat(),
                             "metadata_source": "lancedb_inspection",
@@ -717,7 +719,7 @@ class ChatDatabase:
                             inferred_metadata["retrieval_mode_inferred"] = "hybrid (FTS + vector)"
                         else:
                             inferred_metadata["retrieval_mode_inferred"] = "vector-only"
-                    except:
+                    except Exception:
                         pass
 
                     # Add inspection timestamp
@@ -744,14 +746,12 @@ class ChatDatabase:
                     is_recent = False
                     if created_at:
                         try:
-                            from datetime import datetime, timedelta
-
                             created_date = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                             # Consider indexes created in the last 30 days as "recent"
                             is_recent = created_date > datetime.now().replace(
                                 tzinfo=created_date.tzinfo
                             ) - timedelta(days=30)
-                        except:
+                        except Exception:
                             pass
 
                     # Provide basic fallback metadata with better status detection

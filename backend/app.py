@@ -669,7 +669,7 @@ def build_index(index_id: str, body: BuildIndexRequest = BuildIndexRequest()):
     try:
         rag_resp = requests.post("http://localhost:8001/index", json=payload)
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach the RAG API: {e}")
+        raise HTTPException(status_code=502, detail=f"Could not reach the RAG API: {e}") from e
 
     if rag_resp.status_code == 200:
         meta_updates = {

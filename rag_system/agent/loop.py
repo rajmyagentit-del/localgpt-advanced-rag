@@ -51,7 +51,17 @@ class Agent:
         # in-process TTL cache automatically - see semantic_cache.py.
         self._cache_max_size = 100  # fallback size limit for manual eviction helper
         self._query_cache = get_semantic_cache(maxsize=self._cache_max_size, ttl=300)
-        self.semantic_cache_threshold = self.pipeline_configs.get("semantic_cache_threshold", 0.98)
+        # pipeline_configs is a loosely-typed general config dict (different
+        # keys map to different value types - floats, nested dicts, etc),
+        # so mypy can't statically prove this key holds a float. The
+        # float() call itself is the real runtime safety net: if
+        # misconfigured, this now fails loudly and immediately here,
+        # instead of silently comparing incompatible types later in
+        # _find_in_semantic_cache(). Properly resolving this statically
+        # would mean typing pipeline_configs as a TypedDict or similar
+        # across the whole Agent class - broader work than this CI-setup
+        # pass is scoped for.
+        self.semantic_cache_threshold = float(self.pipeline_configs.get("semantic_cache_threshold", 0.98))  # type: ignore[arg-type]
         # If set to "session", semantic-cache hits will be restricted to the same chat session.
         # Otherwise (default "global") answers can be reused across sessions.
         self.cache_scope = self.pipeline_configs.get(
@@ -269,7 +279,15 @@ Respond with JSON: {{"category": "<your_choice>"}}
         structured_query = self.graph_query_translator.translate(contextual_query)
         if not structured_query.get("start_node"):
             return self.retrieval_pipeline.run(contextual_query, window_size_override=0)
-        results = self.graph_retriever.retrieve(structured_query)
+        # KNOWN INCOMPLETE (see roadmap item #19 - GraphRAG completion):
+        # GraphRetriever.retrieve() expects a plain text query string, but
+        # structured_query is a dict (start_node/relationships) - this
+        # mismatch is real and is exactly why GraphRAG is documented as
+        # disabled/incomplete elsewhere in this project. Not fixed here
+        # since a real fix means either extending GraphRetriever to accept
+        # structured queries or translating back to text - genuine design
+        # work that belongs to item #19, not a type-checking cleanup pass.
+        results = self.graph_retriever.retrieve(structured_query)  # type: ignore[arg-type]
         if not results:
             return self.retrieval_pipeline.run(contextual_query, window_size_override=0)
         answer = ", ".join([res["details"]["node_id"] for res in results])
@@ -297,8 +315,8 @@ Respond with JSON: {{"category": "<your_choice>"}}
     def run(
         self,
         query: str,
-        table_name: str = None,
-        session_id: str = None,
+        table_name: str | None = None,
+        session_id: str | None = None,
         compose_sub_answers: bool | None = None,
         query_decompose: bool | None = None,
         ai_rerank: bool | None = None,
@@ -342,8 +360,8 @@ Respond with JSON: {{"category": "<your_choice>"}}
     async def _run_async(
         self,
         query: str,
-        table_name: str = None,
-        session_id: str = None,
+        table_name: str | None = None,
+        session_id: str | None = None,
         compose_sub_answers: bool | None = None,
         query_decompose: bool | None = None,
         ai_rerank: bool | None = None,
@@ -816,14 +834,15 @@ FINAL ANSWER:
 
         router_prompt = f"""Task: Route query to correct system.
 
-Documents available: Invoices, DeepSeek-V3 research papers
+Documents available:
+{overviews_block}
 
 Query: "{query}"
 
 Is this query asking about:
 A) Greetings/social: "Hi", "Hello", "Thanks", "What's up", "How are you"
 B) General knowledge: "CEO of Tesla", "capital of France", "what is 2+2"  
-C) Document content: invoice amounts, DeepSeek-V3 details, companies mentioned
+C) Document content: anything related to, or possibly answerable from, the documents listed above
 
 If A or B → {{"category": "direct_answer"}}
 If C → {{"category": "rag_query"}}

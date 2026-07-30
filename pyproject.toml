@@ -14,6 +14,7 @@ exclude = [
     ".next",
     "lancedb",
     "index_store",
+    "backend/server.py",  # deprecated, superseded by backend/app.py - see its docstring
 ]
 
 [tool.ruff.lint]
@@ -34,12 +35,32 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Test files commonly have intentionally-unused fixtures/imports
 "tests/*" = ["F401"]
+# FastAPI's dependency injection REQUIRES calling Depends(...) in a
+# function's default arguments - this is the framework's intended usage
+# pattern, not the mutable-default-argument bug B008 is designed to catch.
+"backend/app.py" = ["B008"]
+# tests/conftest.py deliberately stubs heavy modules into sys.modules
+# BEFORE importing anything that depends on them - the "imports not at
+# top of file" this triggers is the point, not an oversight.
+"tests/conftest.py" = ["E402"]
+# rag_system/__init__.py deliberately maps the legacy RAG_LOG_LEVEL env
+# var to LOG_LEVEL BEFORE importing/calling setup_logging() and
+# setup_tracing() (which read env vars at call time) - import ordering
+# here is intentional, not an oversight.
+"rag_system/__init__.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true   # most ML libs (torch, transformers, lancedb...) lack full stubs
 warn_unused_ignores = true
 warn_redundant_casts = true
+# mypy follows imports by default, meaning checking rag_system/agent/
+# would otherwise ALSO report errors from unrelated files it happens to
+# import transitively (e.g. rag_system/api_server.py) - files nobody
+# asked mypy to check and that aren't in scope yet. "silent" means mypy
+# still uses type info from those modules to check the files we DID ask
+# for, it just doesn't surface errors that live inside them.
+follow_imports = "silent"
 # Start permissive (don't require every function to be annotated yet) -
 # this can be tightened incrementally, file by file, as the codebase
 # gains more type coverage. A fresh codebase-wide `strict = true` on a
@@ -55,5 +76,6 @@ module = [
     "rag_system.indexing.multimodal",
     "rag_system.indexing.representations",
     "rag_system.rerankers.*",
+    "rag_system.utils.validate_model_config",  # pre-existing, untouched this session
 ]
 ignore_errors = true

@@ -99,9 +99,9 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict:
     try:
         payload = decode_access_token(token)
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
+        raise HTTPException(status_code=401, detail="Token has expired") from None
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
+        raise HTTPException(status_code=401, detail="Invalid authentication token") from None
 
     return {"user_id": payload["sub"], "email": payload["email"]}
 
