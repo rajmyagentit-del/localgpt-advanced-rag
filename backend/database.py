@@ -102,21 +102,86 @@ class ChatDatabase:
                 FOREIGN KEY(index_id) REFERENCES indexes(id)
             )
         ''')
-        
+
+        # --- Auth (Improvement #10): users table + ownership columns ---
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ''')
+
+        # user_id is added as a nullable column via ALTER TABLE (not in the
+        # CREATE TABLE above) so existing databases created before auth
+        # existed keep working without a manual migration - old sessions
+        # and indexes just have user_id = NULL (unowned/legacy data).
+        self._add_column_if_missing(cursor, "sessions", "user_id", "TEXT")
+        self._add_column_if_missing(cursor, "indexes", "user_id", "TEXT")
+
         conn.commit()
         conn.close()
         logger.info("✅ Database initialized successfully")
+
+    @staticmethod
+    def _add_column_if_missing(cursor, table: str, column: str, col_type: str):
+        """SQLite has no 'ADD COLUMN IF NOT EXISTS' - check PRAGMA table_info
+        first, since re-running ALTER TABLE ADD COLUMN on a column that
+        already exists raises an error."""
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        if column not in existing_columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
     
-    def create_session(self, title: str, model: str) -> str:
-        """Create a new chat session"""
+    # --- Users (Improvement #10) ---
+
+    def create_user(self, email: str, password_hash: str, password_salt: str) -> str:
+        """Create a new user account. Raises sqlite3.IntegrityError if the
+        email is already registered (UNIQUE constraint)."""
+        user_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute('''
+                INSERT INTO users (id, email, password_hash, password_salt, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (user_id, email.lower().strip(), password_hash, password_salt, now))
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info(f"👤 Created new user account: {email}")
+        return user_id
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            'SELECT * FROM users WHERE email = ?', (email.lower().strip(),)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: str) -> dict | None:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def create_session(self, title: str, model: str, user_id: str | None = None) -> str:
+        """Create a new chat session, optionally owned by a user"""
         session_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
         
         conn = sqlite3.connect(self.db_path)
         conn.execute('''
-            INSERT INTO sessions (id, title, created_at, updated_at, model_used)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (session_id, title, now, now, model))
+            INSERT INTO sessions (id, title, created_at, updated_at, model_used, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (session_id, title, now, now, model, user_id))
         conn.commit()
         conn.close()
         
@@ -146,7 +211,7 @@ class ChatDatabase:
         conn.row_factory = sqlite3.Row
         
         cursor = conn.execute('''
-            SELECT id, title, created_at, updated_at, model_used, message_count
+            SELECT id, title, created_at, updated_at, model_used, message_count, user_id
             FROM sessions
             WHERE id = ?
         ''', (session_id,))
@@ -327,15 +392,15 @@ class ChatDatabase:
 
     # -------- Index helpers ---------
 
-    def create_index(self, name: str, description: str|None = None, metadata: dict | None = None) -> str:
+    def create_index(self, name: str, description: str|None = None, metadata: dict | None = None, user_id: str | None = None) -> str:
         idx_id = str(uuid.uuid4())
         created = datetime.now().isoformat()
         vector_table = f"text_pages_{idx_id}"
         conn = sqlite3.connect(self.db_path)
         conn.execute('''
-            INSERT INTO indexes (id, name, description, created_at, updated_at, vector_table_name, metadata)
-            VALUES (?,?,?,?,?,?,?)
-        ''', (idx_id, name, description, created, created, vector_table, json.dumps(metadata or {})))
+            INSERT INTO indexes (id, name, description, created_at, updated_at, vector_table_name, metadata, user_id)
+            VALUES (?,?,?,?,?,?,?,?)
+        ''', (idx_id, name, description, created, created, vector_table, json.dumps(metadata or {}), user_id))
         conn.commit()
         conn.close()
         logger.info(f"📂 Created new index '{name}' ({idx_id[:8]})")

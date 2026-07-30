@@ -83,6 +83,19 @@ class Settings(BaseSettings):
     #     still works out of the box without Redis) ---
     redis_url: str = Field(default="", validation_alias="REDIS_URL")
 
+    # --- Auth (Improvement #10) ---
+    # SECURITY: the default below is fine for local development only.
+    # Anyone deploying this beyond their own machine MUST set a real,
+    # randomly-generated JWT_SECRET_KEY (e.g. `openssl rand -hex 32`) -
+    # using the default in a shared/production environment would let
+    # anyone forge valid auth tokens.
+    jwt_secret_key: str = Field(
+        default="dev-only-insecure-secret-change-me",
+        validation_alias="JWT_SECRET_KEY",
+    )
+    jwt_algorithm: str = Field(default="HS256", validation_alias="JWT_ALGORITHM")
+    jwt_expiry_minutes: int = Field(default=60 * 24 * 7, validation_alias="JWT_EXPIRY_MINUTES")  # 7 days
+
     # --- HuggingFace auth (optional, for gated models) ---
     hf_token: str = Field(default="", validation_alias="HF_TOKEN")
 
