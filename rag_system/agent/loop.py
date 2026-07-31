@@ -11,7 +11,7 @@ import numpy as np
 from cachetools import LRUCache
 
 from rag_system.agent.semantic_cache import get_semantic_cache
-from rag_system.agent.verifier import Verifier
+from rag_system.agent.verifier import VerificationResult, Verifier
 from rag_system.observability import traced, traced_span
 from rag_system.pipelines.retrieval_pipeline import RetrievalPipeline
 from rag_system.retrieval.query_transformer import GraphQueryTranslator, QueryDecomposer
@@ -358,6 +358,44 @@ Respond with JSON: {{"category": "<your_choice>"}}
                 event_callback,
             )
         )
+
+    async def _reformulate_query(self, original_query: str, verification_reasoning: str) -> str:
+        """
+        Improvement #23 (self-correcting agentic loop): given a query
+        whose answer failed verification (wasn't grounded in the
+        retrieved context), asks the LLM to produce a reformulated query
+        more likely to retrieve the right supporting context - using the
+        verifier's OWN stated reasoning for why the previous attempt
+        failed, rather than just blindly retrying the same query.
+
+        Falls back to the original query (rather than raising) if the
+        LLM call fails or returns something degenerate - a failed
+        reformulation should never be worse than not reformulating.
+        """
+        prompt = (
+            "A previous attempt to answer this question failed verification "
+            "against the retrieved context.\n\n"
+            f'Original question: "{original_query}"\n'
+            f"Why the previous attempt failed: {verification_reasoning}\n\n"
+            "Rewrite the question to be more likely to retrieve the correct "
+            "supporting information. Keep it a single, clear question. Do not "
+            "add commentary or explanation - respond with ONLY the rewritten "
+            "question.\n\nRewritten question:"
+        )
+        try:
+            response = await self.llm_client.generate_completion_async(
+                self.ollama_config["generation_model"], prompt
+            )
+            reformulated = (response or {}).get("response", "").strip()
+            if not reformulated or len(reformulated) < 3:
+                logger.warning(
+                    "Query reformulation returned an empty/degenerate result; keeping original query"
+                )
+                return original_query
+            return reformulated
+        except Exception as e:
+            logger.warning(f"Query reformulation failed ({e}); keeping original query")
+            return original_query
 
     # ---------------- Main async implementation --------------------------------------
     @traced("agent.run_query")
@@ -769,22 +807,88 @@ FINAL ANSWER:
                         f"ReRank[{i}] id={d.get('chunk_id')} score={d.get('rerank_score','')} {snippet}"
                     )
 
-        # Verification step (simplified for now) - Skip in fast mode
+        # Verification step, with a self-correcting retry loop
+        # (Improvement #23): the original code just tagged a low-
+        # confidence answer with a warning and gave up. max_retries was
+        # accepted as a parameter but never actually used for anything.
+        # Now, on verification failure, we reformulate the query (using
+        # the verifier's own stated reasoning for why it failed) and
+        # retry retrieval + generation directly - up to max_retries
+        # total attempts - keeping whichever attempt scored highest.
         verification_enabled = self.pipeline_configs.get("verification", {}).get("enabled", True)
         if verify is not None:
             verification_enabled = verify
 
         if verification_enabled and result.get("source_documents"):
-            context_str = "\n".join([doc["text"] for doc in result["source_documents"]])
-            with traced_span(
-                "agent.verification", num_source_docs=len(result["source_documents"])
-            ) as verify_span:
-                verification = await self.verifier.verify_async(
-                    contextual_query, context_str, result["answer"]
-                )
-                verify_span.set_attribute("confidence_score", verification.confidence_score)
-                verify_span.set_attribute("is_grounded", verification.is_grounded)
+            attempts_allowed = max(1, max_retries)
+            current_query = contextual_query
+            best_result = result
+            best_verification: VerificationResult | None = None
 
+            for attempt in range(attempts_allowed):
+                context_str = "\n".join([doc["text"] for doc in result["source_documents"]])
+                with traced_span(
+                    "agent.verification",
+                    attempt=attempt,
+                    num_source_docs=len(result["source_documents"]),
+                ) as verify_span:
+                    verification = await self.verifier.verify_async(
+                        current_query, context_str, result["answer"]
+                    )
+                    verify_span.set_attribute("confidence_score", verification.confidence_score)
+                    verify_span.set_attribute("is_grounded", verification.is_grounded)
+
+                if (
+                    best_verification is None
+                    or verification.confidence_score > best_verification.confidence_score
+                ):
+                    best_result, best_verification = result, verification
+
+                if verification.is_grounded and verification.confidence_score >= 50:
+                    if attempt > 0:
+                        logger.info(
+                            f"Self-correction succeeded on attempt {attempt + 1}/{attempts_allowed}"
+                        )
+                    break
+
+                if attempt < attempts_allowed - 1:
+                    logger.info(
+                        f"Verification failed on attempt {attempt + 1}/{attempts_allowed} "
+                        f"(grounded={verification.is_grounded}, score={verification.confidence_score}) "
+                        f"- reformulating and retrying"
+                    )
+                    current_query = await self._reformulate_query(
+                        current_query, verification.reasoning
+                    )
+                    with traced_span(
+                        "agent.retrieval",
+                        table_name=str(table_name),
+                        query_type="self_correction_retry",
+                        attempt=attempt + 1,
+                    ) as retry_span:
+                        result = self.retrieval_pipeline.run(
+                            current_query,
+                            table_name,
+                            0 if context_expand is False else None,
+                            event_callback=event_callback,
+                        )
+                        retry_span.set_attribute(
+                            "num_source_docs", len(result.get("source_documents", []))
+                        )
+                    if not result.get("source_documents"):
+                        # Nothing retrieved on retry either - stop here
+                        # and fall back to the best attempt seen so far
+                        result = best_result
+                        break
+
+            # The loop above always runs at least once (attempts_allowed
+            # = max(1, max_retries) >= 1) and always updates
+            # best_verification on its first iteration, so this is never
+            # actually None at runtime - asserting it narrows the type
+            # for the type checker rather than leaving it as a silent
+            # assumption.
+            assert best_verification is not None
+            result, verification = best_result, best_verification
             score = verification.confidence_score
 
             # Only include confidence details if we received a non-zero score (0 usually means JSON parse failure)
