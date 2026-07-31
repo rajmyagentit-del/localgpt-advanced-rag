@@ -15,32 +15,17 @@ behavior belong in a separate integration-test suite (not yet built -
 see roadmap item for a full eval suite) that runs with the full stack.
 """
 
-import sys
-import types
-
-# rag_system.agent.loop imports RetrievalPipeline and GraphRetriever, which
-# transitively pull in torch/transformers/ColPali/docling (several GB).
-# We only need the two NAMES to exist for the import statement to succeed -
-# the pure-logic tests we run never call these classes.
-fake_retrieval_pipeline = types.ModuleType("rag_system.pipelines.retrieval_pipeline")
-fake_retrieval_pipeline.RetrievalPipeline = type("RetrievalPipeline", (), {})
-sys.modules["rag_system.pipelines.retrieval_pipeline"] = fake_retrieval_pipeline
-
-fake_retrievers = types.ModuleType("rag_system.retrieval.retrievers")
-fake_retrievers.GraphRetriever = type("GraphRetriever", (), {})
-fake_retrievers.MultiVectorRetriever = type("MultiVectorRetriever", (), {})
-sys.modules["rag_system.retrieval.retrievers"] = fake_retrievers
-
-
-# --- Tracing test setup (Improvement #12) ---
+# --- Tracing test setup (Improvement #12) MUST come first ---
 # OpenTelemetry's global TracerProvider can only be set ONCE per process
 # (later calls to trace.set_tracer_provider() are silently ignored, with
-# a warning). rag_system/__init__.py auto-calls setup_tracing() the
-# moment anything imports the rag_system package - so we MUST install
-# our in-memory test provider here, in conftest.py, since pytest
-# guarantees this file is imported before any test module (and
-# therefore before any test module's `from rag_system...` import can
-# trigger the real, console-exporting setup).
+# a warning). rag_system/__init__.py auto-calls the REAL setup_tracing()
+# the moment ANYTHING imports the rag_system package - including the
+# GraphRetriever import a few lines below this block. So this MUST be
+# the very first thing in this file, before any other import that could
+# transitively trigger rag_system/__init__.py, or the real
+# console-exporting provider wins the race and this test provider is
+# silently ignored (verified: this exact bug reappeared once already
+# when a later import was accidentally added above this block).
 from opentelemetry import trace as _otel_trace
 from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
@@ -58,6 +43,30 @@ import rag_system.observability as _obs
 _obs._initialized = (
     True  # prevents the real setup_tracing() from trying (and failing) to override this
 )
+
+
+# --- Heavy-module stubs (must come after tracing setup, before test collection) ---
+import sys
+import types
+
+# rag_system.agent.loop imports RetrievalPipeline and GraphRetriever, which
+# transitively pull in torch/transformers/ColPali/docling (several GB).
+# We only need the two NAMES to exist for the import statement to succeed -
+# the pure-logic tests we run never call these classes.
+fake_retrieval_pipeline = types.ModuleType("rag_system.pipelines.retrieval_pipeline")
+fake_retrieval_pipeline.RetrievalPipeline = type("RetrievalPipeline", (), {})
+sys.modules["rag_system.pipelines.retrieval_pipeline"] = fake_retrieval_pipeline
+
+fake_retrievers = types.ModuleType("rag_system.retrieval.retrievers")
+# GraphRetriever now lives in its own lightweight module (Improvement
+# #19) with no torch/transformers dependency, so we use the REAL class
+# here rather than a fake placeholder - any test exercising Agent's
+# graph_query path gets genuine GraphRetriever behavior, not a stub.
+from rag_system.retrieval.graph_retriever import GraphRetriever as _RealGraphRetriever
+
+fake_retrievers.GraphRetriever = _RealGraphRetriever
+fake_retrievers.MultiVectorRetriever = type("MultiVectorRetriever", (), {})
+sys.modules["rag_system.retrieval.retrievers"] = fake_retrievers
 
 
 import pytest

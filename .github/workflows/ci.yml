@@ -35,12 +35,14 @@ jobs:
           backend/ eval/ tests/
           rag_system/config.py rag_system/observability.py rag_system/__init__.py
           rag_system/agent/ rag_system/utils/logging_utils.py
+          rag_system/retrieval/graph_retriever.py
       - name: Black (check only, no reformatting)
         run: >
           black --check
           backend/ eval/ tests/
           rag_system/config.py rag_system/observability.py rag_system/__init__.py
           rag_system/agent/ rag_system/utils/logging_utils.py
+          rag_system/retrieval/graph_retriever.py
 
   typecheck:
     name: Type check (mypy)
@@ -57,7 +59,7 @@ jobs:
         # Scoped to the same modules as the pre-commit config - see
         # pyproject.toml's [tool.mypy] section for why this isn't the
         # whole codebase yet.
-        run: mypy rag_system/config.py rag_system/agent/ rag_system/utils/
+        run: mypy rag_system/config.py rag_system/agent/ rag_system/utils/ rag_system/retrieval/graph_retriever.py
 
   test:
     name: Test suite

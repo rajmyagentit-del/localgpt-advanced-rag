@@ -8,6 +8,8 @@ client, etc.) via Agent.__new__, since these particular methods don't
 depend on any instance state set up in __init__.
 """
 
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 
@@ -82,3 +84,83 @@ class TestCacheKeyGeneration:
         k1 = agent._get_cache_key("hello", "direct_answer")
         k2 = agent._get_cache_key("hello", "rag_query")
         assert k1 != k2
+
+
+class TestRunGraphQuery:
+    """
+    Real end-to-end test of Agent._run_graph_query() (Improvement #19 -
+    completing GraphRAG), using a GENUINE GraphRetriever against a real
+    small graph - not a mock of the retrieval logic itself. Only the LLM
+    calls (graph_query_translator.translate) are faked, since those
+    genuinely need a live model.
+
+    This is the test that would have caught all of the real bugs fixed
+    in this feature (missing logger, dict-vs-str type mismatch, wrong
+    result-key access, NodeView-vs-list fuzzy matching) if it had
+    existed before - which is exactly the point of writing it now.
+    """
+
+    @pytest.fixture
+    def graph_path(self, tmp_path):
+        import networkx as nx
+
+        G = nx.DiGraph()
+        G.add_edge("Tim Cook", "Apple", label="IS_CEO_OF")
+        G.add_edge("Apple", "Cupertino", label="HEADQUARTERED_IN")
+        path = str(tmp_path / "test_graph.gml")
+        nx.write_gml(G, path)
+        return path
+
+    @pytest.fixture
+    def agent_with_graph(self, graph_path):
+        from rag_system.retrieval.graph_retriever import GraphRetriever
+
+        a = Agent.__new__(Agent)
+        a.graph_retriever = GraphRetriever(graph_path)
+        a.retrieval_pipeline = MagicMock()
+        a.retrieval_pipeline.run.return_value = {
+            "answer": "fallback answer",
+            "source_documents": [],
+        }
+        return a
+
+    def test_successful_graph_lookup_returns_graph_answer(self, agent_with_graph):
+        agent_with_graph.graph_query_translator = MagicMock()
+        agent_with_graph.graph_query_translator.translate.return_value = {
+            "start_node": "Tim Cook",
+            "edge_label": "IS_CEO_OF",
+        }
+        agent_with_graph._format_query_with_history = MagicMock(side_effect=lambda q, h: q)
+
+        result = agent_with_graph._run_graph_query("Who is the CEO of Apple?", history=[])
+
+        assert "Apple" in result["answer"]
+        assert "From the knowledge graph" in result["answer"]
+        assert len(result["source_documents"]) == 1
+        agent_with_graph.retrieval_pipeline.run.assert_not_called()
+
+    def test_no_start_node_falls_back_to_normal_retrieval(self, agent_with_graph):
+        agent_with_graph.graph_query_translator = MagicMock()
+        agent_with_graph.graph_query_translator.translate.return_value = {}  # no start_node
+        agent_with_graph._format_query_with_history = MagicMock(side_effect=lambda q, h: q)
+
+        result = agent_with_graph._run_graph_query("some vague query", history=[])
+
+        assert result["answer"] == "fallback answer"
+        agent_with_graph.retrieval_pipeline.run.assert_called_once()
+
+    def test_unmatched_start_node_falls_back_to_normal_retrieval(self, agent_with_graph):
+        """start_node is present but doesn't match anything in the real
+        graph - should fall back gracefully, not crash or return a
+        confusing empty answer."""
+        agent_with_graph.graph_query_translator = MagicMock()
+        agent_with_graph.graph_query_translator.translate.return_value = {
+            "start_node": "Someone Not In The Graph",
+            "edge_label": "IS_CEO_OF",
+        }
+        agent_with_graph._format_query_with_history = MagicMock(side_effect=lambda q, h: q)
+
+        result = agent_with_graph._run_graph_query("who is the CEO of nowhere", history=[])
+
+        assert result["answer"] == "fallback answer"
+        agent_with_graph.retrieval_pipeline.run.assert_called_once()

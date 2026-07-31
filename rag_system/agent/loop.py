@@ -277,17 +277,21 @@ Respond with JSON: {{"category": "<your_choice>"}}
     def _run_graph_query(self, query: str, history: list) -> dict[str, Any]:
         contextual_query = self._format_query_with_history(query, history)
         structured_query = self.graph_query_translator.translate(contextual_query)
-        if not structured_query.get("start_node"):
+        start_node = structured_query.get("start_node")
+        if not start_node:
             return self.retrieval_pipeline.run(contextual_query, window_size_override=0)
-        # KNOWN INCOMPLETE (see roadmap item #19 - GraphRAG completion):
-        # GraphRetriever.retrieve() expects a plain text query string, but
-        # structured_query is a dict (start_node/relationships) - this
-        # mismatch is real and is exactly why GraphRAG is documented as
-        # disabled/incomplete elsewhere in this project. Not fixed here
-        # since a real fix means either extending GraphRetriever to accept
-        # structured queries or translating back to text - genuine design
-        # work that belongs to item #19, not a type-checking cleanup pass.
-        results = self.graph_retriever.retrieve(structured_query)  # type: ignore[arg-type]
+
+        # Improvement #19 (GraphRAG completion): use the structured
+        # start_node/edge_label the translator actually produced, via
+        # the retriever's dedicated structured-query method - see
+        # rag_system/retrieval/graph_retriever.py for the fuzzy-matching
+        # details and why this needed its own method rather than
+        # overloading retrieve() with two incompatible calling
+        # conventions.
+        edge_label = structured_query.get("edge_label")
+        results = self.graph_retriever.retrieve_structured(
+            start_node=start_node, edge_label=edge_label
+        )
         if not results:
             return self.retrieval_pipeline.run(contextual_query, window_size_override=0)
         answer = ", ".join([res["details"]["node_id"] for res in results])

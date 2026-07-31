@@ -20,12 +20,82 @@ meaning the LLM router never actually saw what documents exist, for any
 project whose content wasn't literally the original developer's demo
 data. Caught by ruff rule F841 (unused variable) - the unused variable
 was the tell that something downstream wasn't using real data.
+
+Bug 3 (found later, during Improvement #19 - GraphRAG completion):
+rag_system/retrieval/retrievers.py's MultiVectorRetriever.retrieve() -
+the MAIN vector/hybrid search method used for every non-graph RAG
+query - had the exact same local-variable-shadowing bug as Bug 1, this
+time with `logger` instead of `datetime`. A redundant local
+`logger = logging.getLogger(__name__)` shadowed the module-level
+logger for the whole method, so the earlier `logger.info(...)` call
+would raise UnboundLocalError on every single call. Caught by ruff
+rule F823, same as Bug 1.
 """
 
+import ast
 import os
 import tempfile
 
 from backend.database import ChatDatabase
+
+
+def _find_local_reassignments_of_module_global(
+    source_path: str, class_name: str, method_name: str, name: str
+):
+    """
+    AST-based check for a specific, real bug pattern found twice this
+    session (once with `datetime` in backend/database.py, once with
+    `logger` in rag_system/retrieval/retrievers.py): a local
+    `x = ...` assignment anywhere inside a function body makes Python
+    treat `x` as a local variable for the ENTIRE function, so any
+    earlier use of the module-level `x` in that same function raises
+    UnboundLocalError - even though `x` "looks like" it should just
+    refer to the module-level name.
+
+    This check doesn't need the module to actually be importable (it
+    works on heavy-ML-dependency files like retrievers.py without
+    needing torch/transformers installed), since it's pure source-text
+    analysis via Python's own ast module - the same kind of check ruff's
+    F823 rule does, made explicit and permanent as a regression test.
+    """
+    with open(source_path) as f:
+        tree = ast.parse(f.read())
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == method_name:
+                    for stmt in ast.walk(item):
+                        if isinstance(stmt, ast.Assign):
+                            for target in stmt.targets:
+                                if isinstance(target, ast.Name) and target.id == name:
+                                    return stmt.lineno
+    return None
+
+
+def test_multivector_retriever_retrieve_does_not_shadow_module_logger():
+    """
+    Regression test for a real bug found while setting up Improvement
+    #19 (GraphRAG completion) and running ruff over rag_system/retrieval/:
+    MultiVectorRetriever.retrieve() had a redundant local
+    `logger = logging.getLogger(__name__)` statement, which shadowed the
+    module-level `logger` for the whole method - meaning the EARLIER
+    `logger.info(...)` call a few lines above it would raise
+    UnboundLocalError on every single call. This is the main
+    vector/hybrid retrieval path used for every non-graph RAG query, so
+    this was a serious bug, not a cosmetic one. Fixed by removing the
+    redundant local assignment (the module-level logger already covers
+    it, same fix pattern as the datetime bug below).
+    """
+    line = _find_local_reassignments_of_module_global(
+        "rag_system/retrieval/retrievers.py", "MultiVectorRetriever", "retrieve", "logger"
+    )
+    assert line is None, (
+        f"Found a local 'logger = ...' assignment at line {line} inside "
+        f"MultiVectorRetriever.retrieve() - this shadows the module-level "
+        f"logger for the whole method and will cause UnboundLocalError on "
+        f"any earlier logger.* call in the same method."
+    )
 
 
 def test_inspect_and_populate_index_metadata_does_not_crash():

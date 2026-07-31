@@ -51,6 +51,7 @@ This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer
 | 14 | Async indexing queue | RQ (Redis Queue)-based background indexing - `POST /v1/sessions/{id}/index` returns immediately with a job ID instead of blocking for minutes, falls back to the original synchronous behavior if Redis isn't available. |
 | 18 | Docker hardening | All three Dockerfiles converted to genuine multi-stage builds (build tooling no longer ships in the runtime image), non-root users, Next.js standalone output mode. Honest limitation: verified via YAML validation and manual review, not an actual `docker compose build` (no Docker daemon in the environment this was built in). |
 | 11 | CI/CD (GitHub Actions) | `.github/workflows/ci.yml`: lint, type-check, test, and matrix Docker builds on every PR. Lint/type-check scoped to the paths this fork actually maintains (see `pyproject.toml`) rather than the whole legacy repo - setting this up is what surfaced the two bugs described below. |
+| 19 | Complete GraphRAG (Hard tier) | The graph-based retrieval path existed only as scaffolding that had **never once been successfully executed** - see the six real bugs below. `GraphRetriever` extracted into its own dependency-light module (`rag_system/retrieval/graph_retriever.py` - genuinely no torch/transformers dependency, unlike where it used to live), a real `retrieve_structured(start_node, edge_label)` method added with proper fuzzy entity/relationship matching (including SNAKE_CASE-to-natural-language label normalization), and `Agent._run_graph_query()` fixed to actually call it correctly. 23 new tests, all against real graphs (not mocked retrieval logic). Deliberately still **opt-in** (`"graph": {"enabled": False}` by default in `rag_system/main.py`) since knowledge-graph extraction adds real indexing cost (extra LLM calls per chunk) - the roadmap asked to make the feature *work*, not to force it on everyone. |
 
 **A real bug found along the way:** while running the new `ruff --fix` auto-formatter (item 4) against the codebase, it silently rewrote `Optional[callable]` to `callable | None` in `agent/loop.py` - which looks equivalent but isn't (`callable`, the builtin function, doesn't support the `|` operator the way an actual type does), and broke the module at import time. My new test suite (item 5) caught it immediately on the next run. Fixed by using `typing.Callable` instead. This is exactly why automated fixes get re-tested, not just trusted.
 
@@ -64,7 +65,15 @@ This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer
 
 Both are covered by permanent regression tests (`tests/test_regressions.py`) and were pre-existing in the original codebase, not introduced by this fork.
 
-Five real, verified bugs, five real fixes - this is the actual, honest pattern of doing this kind of work, not a highlight reel.
+**Four more, from actually completing GraphRAG (item 19)** - this was, by a wide margin, the most bug-riddled piece of code in the project, almost certainly because it had never once been successfully executed:
+3. `GraphRetriever.retrieve()` called `logger.info(...)` but `logger` was never defined anywhere in the file - guaranteed `NameError` on first use.
+4. `Agent._run_graph_query()` passed a `dict` to `GraphRetriever.retrieve()`, which was typed to take a `str` - and even if that were fixed, it accessed `result["details"]["node_id"]` on a return shape that had no `"details"` key at all.
+5. Passing a NetworkX `NodeView` directly to `fuzzywuzzy.process.extractOne()` silently matches *nothing*, ever, regardless of input - meaning entity matching had never worked, even in the simple plain-text retrieval path. Needed converting to a plain `list()` first.
+6. `MultiVectorRetriever.retrieve()` - the **main vector/hybrid search method used for every non-graph RAG query** - had a redundant local `logger = logging.getLogger(__name__)` that shadowed the module-level logger for the whole method, guaranteeing `UnboundLocalError` on the earlier `logger.info(...)` call a few lines above it, on every single call. Same root-cause pattern as bug 1, caught by the same ruff rule (F823).
+
+Six real, verified bugs, six real fixes, all covered by regression tests. Given how many of these were basic "would crash on first call" errors, it's a strong signal that a decent fraction of this codebase's less-common code paths were written but never actually run - which is exactly why the testing and CI work earlier in this list matters as much as it does.
+
+**Honest limitation on item 19:** the retrieval-side logic (fuzzy entity/relationship matching, structured query handling) is verified with real tests against real graphs. What's *not* yet verified is a full live run - indexing real documents with `GraphExtractor` (needs a running Ollama instance to actually extract entities/relationships) and confirming the agent's LLM-based triage reliably routes appropriate questions to `graph_query` in practice. That's the natural next step once this is run with the full stack live, not a gap in the code itself.
 
 See the "Roadmap" section further down this README for what's planned next.
 
@@ -932,7 +941,7 @@ This fork is being built out as a portfolio project, following a 23-item product
 
 - ✅ **Easy tier (8/8 complete):** structured logging, centralized config, real health checks, lint/format/type tooling, unit tests, input validation, this README, rate limiting.
 - ✅ **Medium tier (10/10 complete):** observability/tracing, automated RAG evaluation, FastAPI migration, API versioning, JWT auth + session ownership, retry/backoff, Redis-backed cache, async indexing queue, Docker hardening, CI/CD.
-- ⬜ **Hard tier (0/5):** completing the GraphRAG feature end-to-end, PostgreSQL migration, multi-tenant isolation, a live evaluation/regression dashboard, a self-correcting agentic verification loop.
+- 🟡 **Hard tier (1/5):** ✅ GraphRAG completion. Remaining: PostgreSQL migration, multi-tenant isolation, a live evaluation/regression dashboard, a self-correcting agentic verification loop.
 
 ---
 
