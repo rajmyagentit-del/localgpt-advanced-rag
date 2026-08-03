@@ -59,7 +59,7 @@ jobs:
         # Scoped to the same modules as the pre-commit config - see
         # pyproject.toml's [tool.mypy] section for why this isn't the
         # whole codebase yet.
-        run: mypy rag_system/config.py rag_system/agent/ rag_system/utils/ rag_system/retrieval/graph_retriever.py
+        run: mypy rag_system/config.py rag_system/agent/ rag_system/utils/ rag_system/retrieval/graph_retriever.py backend/database.py backend/db_schema.py
 
   test:
     name: Test suite

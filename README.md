@@ -53,6 +53,7 @@ This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer
 | 11 | CI/CD (GitHub Actions) | `.github/workflows/ci.yml`: lint, type-check, test, and matrix Docker builds on every PR. Lint/type-check scoped to the paths this fork actually maintains (see `pyproject.toml`) rather than the whole legacy repo - setting this up is what surfaced the two bugs described below. |
 | 19 | Complete GraphRAG (Hard tier) | The graph-based retrieval path existed only as scaffolding that had **never once been successfully executed** - see the six real bugs below. `GraphRetriever` extracted into its own dependency-light module (`rag_system/retrieval/graph_retriever.py` - genuinely no torch/transformers dependency, unlike where it used to live), a real `retrieve_structured(start_node, edge_label)` method added with proper fuzzy entity/relationship matching (including SNAKE_CASE-to-natural-language label normalization), and `Agent._run_graph_query()` fixed to actually call it correctly. 23 new tests, all against real graphs (not mocked retrieval logic). Deliberately still **opt-in** (`"graph": {"enabled": False}` by default in `rag_system/main.py`) since knowledge-graph extraction adds real indexing cost (extra LLM calls per chunk) - the roadmap asked to make the feature *work*, not to force it on everyone. |
 | 23 | Self-correcting agentic loop (Hard tier) | The `Verifier` already existed and could detect an ungrounded/low-confidence answer, but the code just tagged the answer with a warning and gave up - `max_retries` was accepted as a parameter and never actually used anywhere. Now, on verification failure, `Agent._reformulate_query()` asks the LLM to rewrite the query using the verifier's own stated reasoning for *why* it failed, retries retrieval + generation with the reformulated query, and keeps whichever attempt scored highest across up to `max_retries` tries - not just whichever ran last. 5 new tests invoke the *real* `_run_async()` end-to-end (not an isolated helper), proving reformulation only fires on genuine failure, the best-scoring attempt wins even when a later attempt scores worse, and a retry that retrieves nothing falls back gracefully. |
+| 20 | PostgreSQL migration (Hard tier) | `backend/database.py` rewritten from raw `sqlite3` to SQLAlchemy Core (`backend/db_schema.py` defines the dialect-agnostic schema), with **Alembic** for real versioned migrations. Defaults to SQLite (zero-config, matches the original experience); set `DATABASE_URL` to a PostgreSQL connection string for production. All ~20 database methods converted and re-verified against the full existing test suite (175 tests, including 38+ that exercise this exact layer through the real FastAPI app). Found and fixed a real, pre-existing design smell along the way: the file instantiated a global `ChatDatabase()` at *import time*, which silently broke Alembic's schema autogeneration (the database already matched the target schema by the time Alembic compared them, producing an empty migration). Honest limitation: PostgreSQL itself can't be live-tested in this environment (no server available) - verified via real SQLite execution plus PostgreSQL DDL compilation (confirmed `SERIAL`, `ON DELETE CASCADE`, and all constraints translate correctly), not an actual connection to a live Postgres instance. |
 
 **A real bug found along the way:** while running the new `ruff --fix` auto-formatter (item 4) against the codebase, it silently rewrote `Optional[callable]` to `callable | None` in `agent/loop.py` - which looks equivalent but isn't (`callable`, the builtin function, doesn't support the `|` operator the way an actual type does), and broke the module at import time. My new test suite (item 5) caught it immediately on the next run. Fixed by using `typing.Callable` instead. This is exactly why automated fixes get re-tested, not just trusted.
 
@@ -75,6 +76,8 @@ Both are covered by permanent regression tests (`tests/test_regressions.py`) and
 Six real, verified bugs, six real fixes, all covered by regression tests. Given how many of these were basic "would crash on first call" errors, it's a strong signal that a decent fraction of this codebase's less-common code paths were written but never actually run - which is exactly why the testing and CI work earlier in this list matters as much as it does.
 
 **Honest limitation on item 19:** the retrieval-side logic (fuzzy entity/relationship matching, structured query handling) is verified with real tests against real graphs. What's *not* yet verified is a full live run - indexing real documents with `GraphExtractor` (needs a running Ollama instance to actually extract entities/relationships) and confirming the agent's LLM-based triage reliably routes appropriate questions to `graph_query` in practice. That's the natural next step once this is run with the full stack live, not a gap in the code itself.
+
+**One more, from the PostgreSQL migration (item 20):** `backend/database.py` instantiated a global `ChatDatabase()` at *import time* - meaning simply importing the module (something Alembic's `env.py` has to do) had the side effect of opening a real database connection and creating the full schema. This silently broke Alembic's autogenerate: by the time it compared the target database against the schema, the import side effect had already made them match, so the "initial schema" migration came out completely empty (`pass`) instead of containing the actual `CREATE TABLE` statements. Fixed by moving that instantiation into the `if __name__ == "__main__":` block where it belongs, and giving the one real caller (the deprecated `backend/server.py`) its own instance instead of relying on a shared one.
 
 See the "Roadmap" section further down this README for what's planned next.
 
@@ -900,6 +903,34 @@ graph TD
 
 ---
 
+## 🗄️ Database Migrations
+
+By default, the app uses SQLite with zero configuration - it just works, matching the original project's experience. For production deployments needing real concurrent multi-user access (which SQLite does not safely support), point it at PostgreSQL instead:
+
+```bash
+export DATABASE_URL="postgresql://user:password@host:5432/dbname"
+```
+
+Schema changes are managed with [Alembic](https://alembic.sqlalchemy.org/):
+
+```bash
+pip install -r requirements.txt  # includes sqlalchemy, alembic, psycopg2-binary
+
+# Apply all migrations (creates the schema from scratch on a fresh database)
+alembic upgrade head
+
+# After changing backend/db_schema.py, generate a new migration:
+alembic revision --autogenerate -m "describe your change"
+
+# Review the generated migration in alembic/versions/ before applying it -
+# autogenerate is a strong starting point, not a substitute for reading
+# the diff, especially for anything Alembic can't infer (data migrations,
+# renames it might see as a drop+add, etc).
+alembic upgrade head
+```
+
+`alembic/env.py` resolves the target database the same way the app itself does (`DATABASE_URL` if set, otherwise the local SQLite file) - there's no separate connection string to keep in sync.
+
 ## 🧪 Testing & Code Quality
 
 This fork adds a real test suite and enforced code quality tooling on top of the original project.
@@ -942,7 +973,7 @@ This fork is being built out as a portfolio project, following a 23-item product
 
 - ✅ **Easy tier (8/8 complete):** structured logging, centralized config, real health checks, lint/format/type tooling, unit tests, input validation, this README, rate limiting.
 - ✅ **Medium tier (10/10 complete):** observability/tracing, automated RAG evaluation, FastAPI migration, API versioning, JWT auth + session ownership, retry/backoff, Redis-backed cache, async indexing queue, Docker hardening, CI/CD.
-- 🟡 **Hard tier (2/5):** ✅ GraphRAG completion, ✅ self-correcting agentic loop. Remaining: PostgreSQL migration, multi-tenant isolation, a live evaluation/regression dashboard.
+- 🟡 **Hard tier (3/5):** ✅ GraphRAG completion, ✅ self-correcting agentic loop, ✅ PostgreSQL migration. Remaining: multi-tenant isolation, a live evaluation/regression dashboard.
 
 ---
 

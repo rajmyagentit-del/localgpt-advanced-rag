@@ -78,6 +78,15 @@ class Settings(BaseSettings):
         validation_alias="CHAT_DB_PATH",
     )
 
+    # --- Database backend (Improvement #20) ---
+    # Defaults to SQLite (derived from chat_db_path) for zero-config
+    # local development - the app works out of the box without any
+    # extra infrastructure. Set DATABASE_URL to a real PostgreSQL
+    # connection string (e.g. postgresql://user:pass@host:5432/dbname)
+    # for production deployments that need real concurrent multi-user
+    # access, which SQLite does not safely support.
+    database_url: str = Field(default="", validation_alias="DATABASE_URL")
+
     # --- Redis (optional - powers the distributed semantic cache; falls
     #     back to an in-process cache if unset or unreachable, so the app
     #     still works out of the box without Redis) ---

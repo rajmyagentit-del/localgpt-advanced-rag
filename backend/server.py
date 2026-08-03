@@ -48,7 +48,7 @@ import re
 from typing import Any
 
 import simple_pdf_processor as pdf_module
-from database import db, generate_session_title
+from database import ChatDatabase, generate_session_title
 from ollama_client import OllamaClient
 from rate_limiter import chat_rate_limiter, upload_rate_limiter
 from validation import (
@@ -56,6 +56,12 @@ from validation import (
     is_valid_id,
     validate_chat_message,
 )
+
+# This deprecated entrypoint (see module docstring) needs its own ready
+# instance - database.py itself no longer creates one at import time,
+# since that side effect broke Alembic's autogenerate (see Improvement
+# #20 / backend/database.py's __main__ block for the full explanation).
+db = ChatDatabase()
 
 
 # 🆕 Reusable TCPServer with address reuse enabled

@@ -1,296 +1,237 @@
 import json
 import logging
-import sqlite3
 import uuid
 from datetime import datetime, timedelta
+
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
+
+from backend.db_schema import metadata as db_metadata
 
 logger = logging.getLogger(__name__)
 
 
 class ChatDatabase:
-    def __init__(self, db_path: str = None):
-        if db_path is None:
-            # Auto-detect environment and set appropriate path
-            import os
+    def __init__(self, db_path: str | None = None, database_url: str | None = None):
+        """
+        Improvement #20: supports both SQLite (default, zero-config) and
+        PostgreSQL (via database_url or the DATABASE_URL env var / Settings).
 
-            if os.path.exists("/app"):  # Docker environment
-                self.db_path = "/app/backend/chat_data.db"
-            else:  # Local development environment
-                self.db_path = "backend/chat_data.db"
-        else:
-            self.db_path = db_path
+        db_path: legacy parameter, kept for backward compatibility with
+                 existing callers/tests - a plain filesystem path,
+                 translated into a sqlite:/// URL.
+        database_url: an explicit SQLAlchemy connection URL (e.g.
+                 "postgresql://user:pass@host:5432/dbname"). Takes
+                 precedence over db_path and the Settings-derived default.
+        """
+        self.engine: Engine = create_engine(self._resolve_database_url(db_path, database_url))
         self.init_database()
 
+    @staticmethod
+    def _resolve_database_url(db_path: str | None, database_url: str | None) -> str:
+        if database_url:
+            return database_url
+
+        if db_path is not None:
+            return f"sqlite:///{db_path}"
+
+        # No explicit path/URL given - check Settings for a configured
+        # DATABASE_URL (e.g. PostgreSQL in production), otherwise fall
+        # back to the original auto-detected SQLite path so existing
+        # zero-config local/Docker behavior is unchanged.
+        from rag_system.config import settings
+
+        if settings.database_url:
+            return settings.database_url
+
+        import os
+
+        if os.path.exists("/app"):  # Docker environment
+            resolved_path = "/app/backend/chat_data.db"
+        else:  # Local development environment
+            resolved_path = "backend/chat_data.db"
+        return f"sqlite:///{resolved_path}"
+
     def init_database(self):
-        """Initialize the SQLite database with required tables"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        """
+        Create any missing tables (dialect-agnostic, via the shared
+        SQLAlchemy schema in backend/db_schema.py - see that file for
+        why Core rather than the full ORM). For real production schema
+        evolution beyond initial table creation, use Alembic
+        (`alembic upgrade head`) - see alembic/ and the README's
+        Database Migrations section. This method's ADD-COLUMN-if-missing
+        fallback below exists only to keep pre-Alembic SQLite databases
+        (created before this improvement existed) working without a
+        manual migration step.
+        """
+        db_metadata.create_all(self.engine)
 
-        # Enable foreign keys
-        conn.execute("PRAGMA foreign_keys = ON")
+        # Backward compatibility: a database created by the OLD raw-SQL
+        # init_database() (before this migration) has `sessions` and
+        # `indexes` tables but without the `user_id` column added later
+        # for Improvement #10. create_all() only creates MISSING tables,
+        # it never alters existing ones - so for that specific pre-existing
+        # case we still need an explicit, idempotent ADD COLUMN check.
+        # New databases created via create_all() above already have
+        # user_id as part of the schema and this is a no-op for them.
+        self._add_column_if_missing("sessions", "user_id", "VARCHAR")
+        self._add_column_if_missing("indexes", "user_id", "VARCHAR")
 
-        # Sessions table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                model_used TEXT NOT NULL,
-                message_count INTEGER DEFAULT 0
-            )
-        """)
-
-        # Messages table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                content TEXT NOT NULL,
-                sender TEXT NOT NULL CHECK (sender IN ('user', 'assistant')),
-                timestamp TEXT NOT NULL,
-                metadata TEXT DEFAULT '{}',
-                FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
-            )
-        """)
-
-        # Create indexes for better performance
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at)")
-
-        # Documents table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS session_documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                indexed INTEGER DEFAULT 0,
-                FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
-            )
-        """)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_session_documents_session_id ON session_documents(session_id)"
-        )
-
-        # --- NEW: Index persistence tables ---
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS indexes (
-                id TEXT PRIMARY KEY,
-                name TEXT UNIQUE,
-                description TEXT,
-                created_at TEXT,
-                updated_at TEXT,
-                vector_table_name TEXT,
-                metadata TEXT
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS index_documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                index_id TEXT,
-                original_filename TEXT,
-                stored_path TEXT,
-                FOREIGN KEY(index_id) REFERENCES indexes(id)
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS session_indexes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                index_id TEXT,
-                linked_at TEXT,
-                FOREIGN KEY(session_id) REFERENCES sessions(id),
-                FOREIGN KEY(index_id) REFERENCES indexes(id)
-            )
-        """)
-
-        # --- Auth (Improvement #10): users table + ownership columns ---
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                password_salt TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-
-        # user_id is added as a nullable column via ALTER TABLE (not in the
-        # CREATE TABLE above) so existing databases created before auth
-        # existed keep working without a manual migration - old sessions
-        # and indexes just have user_id = NULL (unowned/legacy data).
-        self._add_column_if_missing(cursor, "sessions", "user_id", "TEXT")
-        self._add_column_if_missing(cursor, "indexes", "user_id", "TEXT")
-
-        conn.commit()
-        conn.close()
         logger.info("✅ Database initialized successfully")
 
-    @staticmethod
-    def _add_column_if_missing(cursor, table: str, column: str, col_type: str):
-        """SQLite has no 'ADD COLUMN IF NOT EXISTS' - check PRAGMA table_info
-        first, since re-running ALTER TABLE ADD COLUMN on a column that
-        already exists raises an error."""
-        cursor.execute(f"PRAGMA table_info({table})")
-        existing_columns = {row[1] for row in cursor.fetchall()}
+    def _add_column_if_missing(self, table_name: str, column: str, col_type: str):
+        """Dialect-agnostic ADD COLUMN IF NOT EXISTS, via SQLAlchemy's
+        inspector (works the same way against SQLite and PostgreSQL)."""
+        inspector = inspect(self.engine)
+        existing_columns = {col["name"] for col in inspector.get_columns(table_name)}
         if column not in existing_columns:
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+            with self.engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column} {col_type}"))
 
     # --- Users (Improvement #10) ---
 
     def create_user(self, email: str, password_hash: str, password_salt: str) -> str:
-        """Create a new user account. Raises sqlite3.IntegrityError if the
-        email is already registered (UNIQUE constraint)."""
+        """Create a new user account. Raises sqlalchemy.exc.IntegrityError
+        if the email is already registered (UNIQUE constraint)."""
         user_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
-        conn = sqlite3.connect(self.db_path)
-        try:
+        with self.engine.begin() as conn:
             conn.execute(
-                """
+                text("""
                 INSERT INTO users (id, email, password_hash, password_salt, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-                (user_id, email.lower().strip(), password_hash, password_salt, now),
+                VALUES (:id, :email, :password_hash, :password_salt, :created_at)
+            """),
+                {
+                    "id": user_id,
+                    "email": email.lower().strip(),
+                    "password_hash": password_hash,
+                    "password_salt": password_salt,
+                    "created_at": now,
+                },
             )
-            conn.commit()
-        finally:
-            conn.close()
         logger.info(f"👤 Created new user account: {email}")
         return user_id
 
     def get_user_by_email(self, email: str) -> dict | None:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM users WHERE email = :email"), {"email": email.lower().strip()}
+            ).fetchone()
+        return dict(row._mapping) if row else None
 
     def get_user_by_id(self, user_id: str) -> dict | None:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM users WHERE id = :id"), {"id": user_id}
+            ).fetchone()
+        return dict(row._mapping) if row else None
 
     def create_session(self, title: str, model: str, user_id: str | None = None) -> str:
         """Create a new chat session, optionally owned by a user"""
         session_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
 
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            INSERT INTO sessions (id, title, created_at, updated_at, model_used, user_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """,
-            (session_id, title, now, now, model, user_id),
-        )
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                INSERT INTO sessions (id, title, created_at, updated_at, model_used, user_id)
+                VALUES (:id, :title, :created_at, :updated_at, :model_used, :user_id)
+            """),
+                {
+                    "id": session_id,
+                    "title": title,
+                    "created_at": now,
+                    "updated_at": now,
+                    "model_used": model,
+                    "user_id": user_id,
+                },
+            )
 
         logger.info(f"📝 Created new session: {session_id[:8]}... - {title}")
         return session_id
 
     def get_sessions(self, limit: int = 50) -> list[dict]:
         """Get all chat sessions, ordered by most recent"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        cursor = conn.execute(
-            """
-            SELECT id, title, created_at, updated_at, model_used, message_count
-            FROM sessions
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """,
-            (limit,),
-        )
-
-        sessions = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-
-        return sessions
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                SELECT id, title, created_at, updated_at, model_used, message_count
+                FROM sessions
+                ORDER BY updated_at DESC
+                LIMIT :limit
+            """),
+                {"limit": limit},
+            ).fetchall()
+        return [dict(row._mapping) for row in rows]
 
     def get_session(self, session_id: str) -> dict | None:
         """Get a specific session"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                SELECT id, title, created_at, updated_at, model_used, message_count, user_id
+                FROM sessions
+                WHERE id = :id
+            """),
+                {"id": session_id},
+            ).fetchone()
+        return dict(row._mapping) if row else None
 
-        cursor = conn.execute(
-            """
-            SELECT id, title, created_at, updated_at, model_used, message_count, user_id
-            FROM sessions
-            WHERE id = ?
-        """,
-            (session_id,),
-        )
-
-        row = cursor.fetchone()
-        conn.close()
-
-        return dict(row) if row else None
-
-    def add_message(self, session_id: str, content: str, sender: str, metadata: dict = None) -> str:
+    def add_message(
+        self, session_id: str, content: str, sender: str, metadata: dict | None = None
+    ) -> str:
         """Add a message to a session"""
         message_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
         metadata_json = json.dumps(metadata or {})
 
-        conn = sqlite3.connect(self.db_path)
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                INSERT INTO messages (id, session_id, content, sender, timestamp, metadata)
+                VALUES (:id, :session_id, :content, :sender, :timestamp, :metadata)
+            """),
+                {
+                    "id": message_id,
+                    "session_id": session_id,
+                    "content": content,
+                    "sender": sender,
+                    "timestamp": now,
+                    "metadata": metadata_json,
+                },
+            )
 
-        # Add the message
-        conn.execute(
-            """
-            INSERT INTO messages (id, session_id, content, sender, timestamp, metadata)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """,
-            (message_id, session_id, content, sender, now, metadata_json),
-        )
-
-        # Update session timestamp and message count
-        conn.execute(
-            """
-            UPDATE sessions 
-            SET updated_at = ?, 
-                message_count = message_count + 1
-            WHERE id = ?
-        """,
-            (now, session_id),
-        )
-
-        conn.commit()
-        conn.close()
+            conn.execute(
+                text("""
+                UPDATE sessions
+                SET updated_at = :updated_at,
+                    message_count = message_count + 1
+                WHERE id = :id
+            """),
+                {"updated_at": now, "id": session_id},
+            )
 
         return message_id
 
     def get_messages(self, session_id: str, limit: int = 100) -> list[dict]:
         """Get all messages for a session"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        cursor = conn.execute(
-            """
-            SELECT id, content, sender, timestamp, metadata
-            FROM messages
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-            LIMIT ?
-        """,
-            (session_id, limit),
-        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                SELECT id, content, sender, timestamp, metadata
+                FROM messages
+                WHERE session_id = :session_id
+                ORDER BY timestamp ASC
+                LIMIT :limit
+            """),
+                {"session_id": session_id, "limit": limit},
+            ).fetchall()
 
         messages = []
-        for row in cursor.fetchall():
-            message = dict(row)
+        for row in rows:
+            message = dict(row._mapping)
             message["metadata"] = json.loads(message["metadata"])
             messages.append(message)
-
-        conn.close()
         return messages
 
     def get_conversation_history(self, session_id: str) -> list[dict]:
@@ -305,25 +246,21 @@ class ChatDatabase:
 
     def update_session_title(self, session_id: str, title: str):
         """Update session title"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            UPDATE sessions 
-            SET title = ?, updated_at = ?
-            WHERE id = ?
-        """,
-            (title, datetime.now().isoformat(), session_id),
-        )
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                UPDATE sessions
+                SET title = :title, updated_at = :updated_at
+                WHERE id = :id
+            """),
+                {"title": title, "updated_at": datetime.now().isoformat(), "id": session_id},
+            )
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and all its messages"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        deleted = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            result = conn.execute(text("DELETE FROM sessions WHERE id = :id"), {"id": session_id})
+            deleted = result.rowcount > 0
 
         if deleted:
             logger.info(f"🗑️ Deleted session: {session_id[:8]}...")
@@ -332,27 +269,22 @@ class ChatDatabase:
 
     def cleanup_empty_sessions(self) -> int:
         """Remove sessions with no messages"""
-        conn = sqlite3.connect(self.db_path)
+        with self.engine.begin() as conn:
+            rows = conn.execute(text("""
+                SELECT s.id FROM sessions s
+                LEFT JOIN messages m ON s.id = m.session_id
+                WHERE m.id IS NULL
+            """)).fetchall()
+            empty_sessions = [row[0] for row in rows]
 
-        # Find sessions with no messages
-        cursor = conn.execute("""
-            SELECT s.id FROM sessions s
-            LEFT JOIN messages m ON s.id = m.session_id
-            WHERE m.id IS NULL
-        """)
-
-        empty_sessions = [row[0] for row in cursor.fetchall()]
-
-        # Delete empty sessions
-        deleted_count = 0
-        for session_id in empty_sessions:
-            cursor = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-            if cursor.rowcount > 0:
-                deleted_count += 1
-                logger.info(f"🗑️ Cleaned up empty session: {session_id[:8]}...")
-
-        conn.commit()
-        conn.close()
+            deleted_count = 0
+            for session_id in empty_sessions:
+                result = conn.execute(
+                    text("DELETE FROM sessions WHERE id = :id"), {"id": session_id}
+                )
+                if result.rowcount > 0:
+                    deleted_count += 1
+                    logger.info(f"🗑️ Cleaned up empty session: {session_id[:8]}...")
 
         if deleted_count > 0:
             logger.info(f"✨ Cleaned up {deleted_count} empty sessions")
@@ -361,27 +293,16 @@ class ChatDatabase:
 
     def get_stats(self) -> dict:
         """Get database statistics"""
-        conn = sqlite3.connect(self.db_path)
-
-        # Get session count
-        cursor = conn.execute("SELECT COUNT(*) FROM sessions")
-        session_count = cursor.fetchone()[0]
-
-        # Get message count
-        cursor = conn.execute("SELECT COUNT(*) FROM messages")
-        message_count = cursor.fetchone()[0]
-
-        # Get most used model
-        cursor = conn.execute("""
-            SELECT model_used, COUNT(*) as count
-            FROM sessions
-            GROUP BY model_used
-            ORDER BY count DESC
-            LIMIT 1
-        """)
-        most_used_model = cursor.fetchone()
-
-        conn.close()
+        with self.engine.connect() as conn:
+            session_count = conn.execute(text("SELECT COUNT(*) FROM sessions")).scalar()
+            message_count = conn.execute(text("SELECT COUNT(*) FROM messages")).scalar()
+            most_used_model = conn.execute(text("""
+                SELECT model_used, COUNT(*) as count
+                FROM sessions
+                GROUP BY model_used
+                ORDER BY count DESC
+                LIMIT 1
+            """)).fetchone()
 
         return {
             "total_sessions": session_count,
@@ -389,28 +310,36 @@ class ChatDatabase:
             "most_used_model": most_used_model[0] if most_used_model else None,
         }
 
-    def add_document_to_session(self, session_id: str, file_path: str) -> int:
+    def add_document_to_session(self, session_id: str, file_path: str) -> int | None:
         """Adds a document file path to a session."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute(
-            "INSERT INTO session_documents (session_id, file_path) VALUES (?, ?)",
-            (session_id, file_path),
-        )
-        doc_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    "INSERT INTO session_documents (session_id, file_path) VALUES (:session_id, :file_path)"
+                ),
+                {"session_id": session_id, "file_path": file_path},
+            )
+            # lastrowid works reliably for SQLite but is not guaranteed
+            # across DBAPI backends (SQLAlchemy's own docs note this).
+            # No current caller actually uses the returned doc_id (both
+            # call sites in app.py/server.py discard it) - a graceful
+            # None on backends where it's unavailable is an honest
+            # degradation, not a silent correctness issue.
+            try:
+                doc_id = result.lastrowid
+            except Exception:
+                doc_id = None
         logger.info(f"📄 Added document '{file_path}' to session {session_id[:8]}...")
         return doc_id
 
     def get_documents_for_session(self, session_id: str) -> list[str]:
         """Retrieves all document file paths for a given session."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute(
-            "SELECT file_path FROM session_documents WHERE session_id = ?", (session_id,)
-        )
-        paths = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return paths
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT file_path FROM session_documents WHERE session_id = :session_id"),
+                {"session_id": session_id},
+            ).fetchall()
+        return [row[0] for row in rows]
 
     # -------- Index helpers ---------
 
@@ -424,111 +353,106 @@ class ChatDatabase:
         idx_id = str(uuid.uuid4())
         created = datetime.now().isoformat()
         vector_table = f"text_pages_{idx_id}"
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            INSERT INTO indexes (id, name, description, created_at, updated_at, vector_table_name, metadata, user_id)
-            VALUES (?,?,?,?,?,?,?,?)
-        """,
-            (
-                idx_id,
-                name,
-                description,
-                created,
-                created,
-                vector_table,
-                json.dumps(metadata or {}),
-                user_id,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                INSERT INTO indexes (id, name, description, created_at, updated_at, vector_table_name, metadata, user_id)
+                VALUES (:id, :name, :description, :created_at, :updated_at, :vector_table_name, :metadata, :user_id)
+            """),
+                {
+                    "id": idx_id,
+                    "name": name,
+                    "description": description,
+                    "created_at": created,
+                    "updated_at": created,
+                    "vector_table_name": vector_table,
+                    "metadata": json.dumps(metadata or {}),
+                    "user_id": user_id,
+                },
+            )
         logger.info(f"📂 Created new index '{name}' ({idx_id[:8]})")
         return idx_id
 
     def get_index(self, index_id: str) -> dict | None:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT * FROM indexes WHERE id=?", (index_id,))
-        row = cur.fetchone()
-        if not row:
-            conn.close()
-            return None
-        idx = dict(row)
-        idx["metadata"] = json.loads(idx["metadata"] or "{}")
-        cur = conn.execute(
-            "SELECT original_filename, stored_path FROM index_documents WHERE index_id=?",
-            (index_id,),
-        )
-        docs = [{"filename": r[0], "stored_path": r[1]} for r in cur.fetchall()]
-        idx["documents"] = docs
-        conn.close()
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM indexes WHERE id = :id"), {"id": index_id}
+            ).fetchone()
+            if not row:
+                return None
+            idx = dict(row._mapping)
+            idx["metadata"] = json.loads(idx["metadata"] or "{}")
+            doc_rows = conn.execute(
+                text(
+                    "SELECT original_filename, stored_path FROM index_documents WHERE index_id = :id"
+                ),
+                {"id": index_id},
+            ).fetchall()
+        idx["documents"] = [{"filename": r[0], "stored_path": r[1]} for r in doc_rows]
         return idx
 
     def list_indexes(self) -> list[dict]:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM indexes").fetchall()
-        res = []
-        for r in rows:
-            item = dict(r)
-            item["metadata"] = json.loads(item["metadata"] or "{}")
-            # attach documents list for convenience
-            docs_cur = conn.execute(
-                "SELECT original_filename, stored_path FROM index_documents WHERE index_id=?",
-                (item["id"],),
-            )
-            docs = [{"filename": d[0], "stored_path": d[1]} for d in docs_cur.fetchall()]
-            item["documents"] = docs
-            res.append(item)
-        conn.close()
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("SELECT * FROM indexes")).fetchall()
+            res = []
+            for r in rows:
+                item = dict(r._mapping)
+                item["metadata"] = json.loads(item["metadata"] or "{}")
+                doc_rows = conn.execute(
+                    text(
+                        "SELECT original_filename, stored_path FROM index_documents WHERE index_id = :id"
+                    ),
+                    {"id": item["id"]},
+                ).fetchall()
+                item["documents"] = [{"filename": d[0], "stored_path": d[1]} for d in doc_rows]
+                res.append(item)
         return res
 
     def add_document_to_index(self, index_id: str, filename: str, stored_path: str):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT INTO index_documents (index_id, original_filename, stored_path) VALUES (?,?,?)",
-            (index_id, filename, stored_path),
-        )
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO index_documents (index_id, original_filename, stored_path) VALUES (:index_id, :filename, :stored_path)"
+                ),
+                {"index_id": index_id, "filename": filename, "stored_path": stored_path},
+            )
 
     def link_index_to_session(self, session_id: str, index_id: str):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT INTO session_indexes (session_id, index_id, linked_at) VALUES (?,?,?)",
-            (session_id, index_id, datetime.now().isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO session_indexes (session_id, index_id, linked_at) VALUES (:session_id, :index_id, :linked_at)"
+                ),
+                {
+                    "session_id": session_id,
+                    "index_id": index_id,
+                    "linked_at": datetime.now().isoformat(),
+                },
+            )
 
     def get_indexes_for_session(self, session_id: str) -> list[str]:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute(
-            "SELECT index_id FROM session_indexes WHERE session_id=? ORDER BY linked_at",
-            (session_id,),
-        )
-        ids = [r[0] for r in cursor.fetchall()]
-        conn.close()
-        return ids
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT index_id FROM session_indexes WHERE session_id = :session_id ORDER BY linked_at"
+                ),
+                {"session_id": session_id},
+            ).fetchall()
+        return [r[0] for r in rows]
 
     def delete_index(self, index_id: str) -> bool:
         """Delete an index and its related records (documents, session links). Returns True if deleted."""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            # Get vector table name before deletion (optional, for LanceDB cleanup)
-            cur = conn.execute("SELECT vector_table_name FROM indexes WHERE id = ?", (index_id,))
-            row = cur.fetchone()
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text("SELECT vector_table_name FROM indexes WHERE id = :id"), {"id": index_id}
+            ).fetchone()
             vector_table_name = row[0] if row else None
 
-            # Remove child rows first due to foreign‐key constraints
-            conn.execute("DELETE FROM index_documents WHERE index_id = ?", (index_id,))
-            conn.execute("DELETE FROM session_indexes WHERE index_id = ?", (index_id,))
-            cursor = conn.execute("DELETE FROM indexes WHERE id = ?", (index_id,))
-            deleted = cursor.rowcount > 0
-            conn.commit()
-        finally:
-            conn.close()
+            # Remove child rows first due to foreign-key constraints
+            conn.execute(text("DELETE FROM index_documents WHERE index_id = :id"), {"id": index_id})
+            conn.execute(text("DELETE FROM session_indexes WHERE index_id = :id"), {"id": index_id})
+            result = conn.execute(text("DELETE FROM indexes WHERE id = :id"), {"id": index_id})
+            deleted = result.rowcount > 0
 
         if deleted:
             logger.info(f"🗑️ Deleted index {index_id[:8]}... and related records")
@@ -550,21 +474,24 @@ class ChatDatabase:
 
     def update_index_metadata(self, index_id: str, updates: dict):
         """Merge new key/values into an index's metadata JSON column."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT metadata FROM indexes WHERE id=?", (index_id,))
-        row = cur.fetchone()
-        if row is None:
-            conn.close()
-            raise ValueError("Index not found")
-        existing = json.loads(row["metadata"] or "{}")
-        existing.update(updates)
-        conn.execute(
-            "UPDATE indexes SET metadata=?, updated_at=? WHERE id=?",
-            (json.dumps(existing), datetime.now().isoformat(), index_id),
-        )
-        conn.commit()
-        conn.close()
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text("SELECT metadata FROM indexes WHERE id = :id"), {"id": index_id}
+            ).fetchone()
+            if row is None:
+                raise ValueError("Index not found")
+            existing = json.loads(row[0] or "{}")
+            existing.update(updates)
+            conn.execute(
+                text(
+                    "UPDATE indexes SET metadata = :metadata, updated_at = :updated_at WHERE id = :id"
+                ),
+                {
+                    "metadata": json.dumps(existing),
+                    "updated_at": datetime.now().isoformat(),
+                    "id": index_id,
+                },
+            )
 
     def inspect_and_populate_index_metadata(self, index_id: str) -> dict:
         """
@@ -826,9 +753,17 @@ def generate_session_title(first_message: str, max_length: int = 50) -> str:
 
 
 # Global database instance
-db = ChatDatabase()
-
 if __name__ == "__main__":
+    # Manual smoke test - only runs a real ChatDatabase instance when
+    # this file is executed directly (`python -m backend.database`), not
+    # on every import. A previous version of this file instantiated
+    # `db = ChatDatabase()` unconditionally at module level, which meant
+    # simply IMPORTING this module had side effects (created/opened a
+    # real database connection and schema) - this silently broke
+    # Alembic's autogenerate schema comparison (Improvement #20), which
+    # imports this module and got a database that already had the
+    # target schema applied, making every migration look empty.
+    db = ChatDatabase()
     # Test the database
     logger.info("🧪 Testing database...")
 
