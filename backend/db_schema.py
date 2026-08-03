@@ -40,6 +40,14 @@ users = Table(
     Column("password_hash", String, nullable=False),
     Column("password_salt", String, nullable=False),
     Column("created_at", String, nullable=False),
+    # Improvement #21 (multi-tenant isolation): per-user usage tracking,
+    # enforced against configurable quotas (see rag_system/config.py's
+    # max_storage_bytes_per_user / max_queries_per_day) - what actually
+    # makes this a real multi-tenant SaaS platform rather than just
+    # "has login".
+    Column("storage_bytes_used", Integer, server_default="0"),
+    Column("query_count_today", Integer, server_default="0"),
+    Column("query_count_reset_at", String, nullable=True),
 )
 
 sessions = Table(

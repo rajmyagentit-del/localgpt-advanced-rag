@@ -406,3 +406,198 @@ class TestOwnership:
             f"/v1/indexes/{index_id}", headers={"Authorization": f"Bearer {token_b}"}
         )
         assert other_resp.status_code == 403
+
+
+class TestMultiTenantIsolation:
+    """Improvement #21: tests the parts specific to real multi-tenancy -
+    list endpoints not leaking other tenants' data, and cross-tenant
+    writes (upload/build/link) being blocked, not just reads."""
+
+    def _register_and_get_token(self, client, email):
+        resp = client.post("/v1/auth/register", json={"email": email, "password": "hunter22222"})
+        return resp.json()["access_token"], resp.json()["user_id"]
+
+    def test_session_list_only_shows_own_sessions_not_everyone_elses(self, client):
+        token_a, _ = self._register_and_get_token(client, "lista@example.com")
+        token_b, _ = self._register_and_get_token(client, "listb@example.com")
+
+        client.post(
+            "/v1/sessions", json={"title": "A1"}, headers={"Authorization": f"Bearer {token_a}"}
+        )
+        client.post(
+            "/v1/sessions", json={"title": "A2"}, headers={"Authorization": f"Bearer {token_a}"}
+        )
+        client.post(
+            "/v1/sessions", json={"title": "B1"}, headers={"Authorization": f"Bearer {token_b}"}
+        )
+
+        resp_a = client.get("/v1/sessions", headers={"Authorization": f"Bearer {token_a}"})
+        titles_a = {s["title"] for s in resp_a.json()["sessions"]}
+        assert titles_a == {"A1", "A2"}, "User A's list must not include User B's session"
+
+        resp_b = client.get("/v1/sessions", headers={"Authorization": f"Bearer {token_b}"})
+        titles_b = {s["title"] for s in resp_b.json()["sessions"]}
+        assert titles_b == {"B1"}
+
+    def test_index_list_only_shows_own_indexes_not_everyone_elses(self, client):
+        token_a, _ = self._register_and_get_token(client, "idxlista@example.com")
+        token_b, _ = self._register_and_get_token(client, "idxlistb@example.com")
+
+        client.post(
+            "/v1/indexes", json={"name": "IdxA"}, headers={"Authorization": f"Bearer {token_a}"}
+        )
+        client.post(
+            "/v1/indexes", json={"name": "IdxB"}, headers={"Authorization": f"Bearer {token_b}"}
+        )
+
+        resp_a = client.get("/v1/indexes", headers={"Authorization": f"Bearer {token_a}"})
+        names_a = {i["name"] for i in resp_a.json()["indexes"]}
+        assert names_a == {"IdxA"}
+
+    def test_anonymous_list_does_not_show_authenticated_users_data(self, client):
+        """This is the exact data-leak this improvement fixes: before,
+        an anonymous (or any) caller listing /v1/sessions saw EVERY
+        session from every user with no filtering at all."""
+        token, _ = self._register_and_get_token(client, "leaktest@example.com")
+        client.post(
+            "/v1/sessions",
+            json={"title": "Private Session"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        anon_resp = client.get("/v1/sessions")
+        titles = {s["title"] for s in anon_resp.json()["sessions"]}
+        assert "Private Session" not in titles
+
+    def test_cannot_upload_to_another_users_index(self, client):
+        token_a, _ = self._register_and_get_token(client, "uploada@example.com")
+        token_b, _ = self._register_and_get_token(client, "uploadb@example.com")
+
+        create_resp = client.post(
+            "/v1/indexes",
+            json={"name": "A's Index"},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        index_id = create_resp.json()["index_id"]
+
+        upload_resp = client.post(
+            f"/v1/indexes/{index_id}/upload",
+            files={"files": ("test.txt", b"content", "text/plain")},
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert upload_resp.status_code == 403
+
+    def test_cannot_build_another_users_index(self, client):
+        token_a, _ = self._register_and_get_token(client, "builda@example.com")
+        token_b, _ = self._register_and_get_token(client, "buildb@example.com")
+
+        create_resp = client.post(
+            "/v1/indexes",
+            json={"name": "A's Buildable Index"},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        index_id = create_resp.json()["index_id"]
+
+        build_resp = client.post(
+            f"/v1/indexes/{index_id}/build",
+            json={},
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert build_resp.status_code == 403
+
+    def test_cannot_link_another_users_index_to_own_session(self, client):
+        token_a, _ = self._register_and_get_token(client, "linka@example.com")
+        token_b, _ = self._register_and_get_token(client, "linkb@example.com")
+
+        idx_resp = client.post(
+            "/v1/indexes",
+            json={"name": "A's Index"},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        index_id = idx_resp.json()["index_id"]
+
+        session_resp = client.post(
+            "/v1/sessions",
+            json={"title": "B's Session"},
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        session_id = session_resp.json()["session_id"]
+
+        link_resp = client.post(
+            f"/v1/sessions/{session_id}/indexes/{index_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert link_resp.status_code == 403
+
+    def test_storage_quota_blocks_upload_that_would_exceed_it(self, client, monkeypatch):
+        import rag_system.config as config_module
+
+        monkeypatch.setattr(config_module.settings, "max_storage_bytes_per_user", 10)
+
+        token, _ = self._register_and_get_token(client, "quotauser@example.com")
+        idx_resp = client.post(
+            "/v1/indexes",
+            json={"name": "Quota Test Index"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        index_id = idx_resp.json()["index_id"]
+
+        upload_resp = client.post(
+            f"/v1/indexes/{index_id}/upload",
+            files={
+                "files": (
+                    "test.txt",
+                    b"this content is definitely more than 10 bytes",
+                    "text/plain",
+                )
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert upload_resp.status_code == 413
+        assert "quota" in upload_resp.json()["detail"].lower()
+
+    def test_query_quota_blocks_chat_after_daily_limit_reached(self, client, monkeypatch):
+        import rag_system.config as config_module
+
+        monkeypatch.setattr(config_module.settings, "max_queries_per_day", 1)
+
+        token, _ = self._register_and_get_token(client, "queryquotauser@example.com")
+        session_resp = client.post(
+            "/v1/sessions",
+            json={"title": "Quota Chat"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        session_id = session_resp.json()["session_id"]
+
+        first = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"message": "first message"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert first.status_code != 429
+
+        second = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"message": "second message"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert second.status_code == 429
+        assert (
+            "daily" in second.json()["detail"].lower() or "limit" in second.json()["detail"].lower()
+        )
+
+    def test_anonymous_users_are_not_subject_to_query_quota(self, client, monkeypatch):
+        """Query quotas only make sense for identified tenants - an
+        anonymous caller has no user_id to track usage against, so
+        should never be blocked by this specific mechanism (rate
+        limiting still applies separately)."""
+        import rag_system.config as config_module
+
+        monkeypatch.setattr(config_module.settings, "max_queries_per_day", 1)
+
+        session_resp = client.post("/v1/sessions", json={"title": "Anon Chat"})
+        session_id = session_resp.json()["session_id"]
+
+        for _ in range(2):
+            resp = client.post(f"/v1/sessions/{session_id}/messages", json={"message": "hello"})
+            assert resp.status_code != 429

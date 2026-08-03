@@ -107,6 +107,14 @@ class Settings(BaseSettings):
         default=60 * 24 * 7, validation_alias="JWT_EXPIRY_MINUTES"
     )  # 7 days
 
+    # --- Multi-tenant usage quotas (Improvement #21) ---
+    # Per-user limits, enforced in backend/app.py. Generous defaults -
+    # meant to catch runaway/abusive usage, not to constrain normal use.
+    max_storage_bytes_per_user: int = Field(
+        default=500 * 1024 * 1024, validation_alias="MAX_STORAGE_BYTES_PER_USER"  # 500 MB
+    )
+    max_queries_per_day: int = Field(default=200, validation_alias="MAX_QUERIES_PER_DAY")
+
     # --- HuggingFace auth (optional, for gated models) ---
     hf_token: str = Field(default="", validation_alias="HF_TOKEN")
 

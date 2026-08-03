@@ -76,6 +76,9 @@ class ChatDatabase:
         # user_id as part of the schema and this is a no-op for them.
         self._add_column_if_missing("sessions", "user_id", "VARCHAR")
         self._add_column_if_missing("indexes", "user_id", "VARCHAR")
+        self._add_column_if_missing("users", "storage_bytes_used", "INTEGER")
+        self._add_column_if_missing("users", "query_count_today", "INTEGER")
+        self._add_column_if_missing("users", "query_count_reset_at", "VARCHAR")
 
         logger.info("✅ Database initialized successfully")
 
@@ -126,6 +129,61 @@ class ChatDatabase:
             ).fetchone()
         return dict(row._mapping) if row else None
 
+    # --- Usage tracking / quotas (Improvement #21) ---
+
+    def get_user_usage(self, user_id: str) -> dict:
+        """Returns current storage/query usage for a user, resetting the
+        daily query counter if it's a new day since it was last reset."""
+        user = self.get_user_by_id(user_id)
+        if user is None:
+            raise ValueError("User not found")
+
+        today = datetime.now().date().isoformat()
+        reset_at = user.get("query_count_reset_at")
+        if reset_at != today:
+            # New day - reset the counter (lazily, on first read/write of
+            # the day, rather than needing a scheduled job)
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE users SET query_count_today = 0, query_count_reset_at = :today WHERE id = :id"
+                    ),
+                    {"today": today, "id": user_id},
+                )
+            query_count_today = 0
+        else:
+            query_count_today = user.get("query_count_today") or 0
+
+        return {
+            "storage_bytes_used": user.get("storage_bytes_used") or 0,
+            "query_count_today": query_count_today,
+        }
+
+    def increment_user_storage(self, user_id: str, bytes_delta: int) -> int:
+        """Adds bytes_delta (can be negative, e.g. on delete) to a user's
+        tracked storage usage. Returns the new total."""
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE users SET storage_bytes_used = COALESCE(storage_bytes_used, 0) + :delta WHERE id = :id"
+                ),
+                {"delta": bytes_delta, "id": user_id},
+            )
+        return self.get_user_usage(user_id)["storage_bytes_used"]
+
+    def increment_user_query_count(self, user_id: str) -> int:
+        """Increments (and lazily resets, if it's a new day) a user's
+        daily query count. Returns the new count for that day."""
+        self.get_user_usage(user_id)  # ensures the daily reset has happened first
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE users SET query_count_today = COALESCE(query_count_today, 0) + 1 WHERE id = :id"
+                ),
+                {"id": user_id},
+            )
+        return self.get_user_usage(user_id)["query_count_today"]
+
     def create_session(self, title: str, model: str, user_id: str | None = None) -> str:
         """Create a new chat session, optionally owned by a user"""
         session_id = str(uuid.uuid4())
@@ -150,18 +208,27 @@ class ChatDatabase:
         logger.info(f"📝 Created new session: {session_id[:8]}... - {title}")
         return session_id
 
-    def get_sessions(self, limit: int = 50) -> list[dict]:
-        """Get all chat sessions, ordered by most recent"""
+    def get_sessions(self, limit: int = 50, user_id: str | None = None) -> list[dict]:
+        """
+        Get chat sessions, ordered by most recent.
+
+        Improvement #21 (multi-tenant isolation): SECURE BY DEFAULT.
+        - user_id given: only that user's OWNED sessions.
+        - user_id=None (no authenticated caller): only UNOWNED/legacy
+          sessions (created before auth existed), never everyone's data.
+          This replaces the original behavior, which returned every
+          session from every user with no filtering at all - a real
+          data leak, not an intentional "admin view."
+        """
+        query = "SELECT id, title, created_at, updated_at, model_used, message_count FROM sessions WHERE "
+        query += "user_id = :user_id" if user_id is not None else "user_id IS NULL"
+        query += " ORDER BY updated_at DESC LIMIT :limit"
+        params: dict = {"limit": limit}
+        if user_id is not None:
+            params["user_id"] = user_id
+
         with self.engine.connect() as conn:
-            rows = conn.execute(
-                text("""
-                SELECT id, title, created_at, updated_at, model_used, message_count
-                FROM sessions
-                ORDER BY updated_at DESC
-                LIMIT :limit
-            """),
-                {"limit": limit},
-            ).fetchall()
+            rows = conn.execute(text(query), params).fetchall()
         return [dict(row._mapping) for row in rows]
 
     def get_session(self, session_id: str) -> dict | None:
@@ -391,9 +458,18 @@ class ChatDatabase:
         idx["documents"] = [{"filename": r[0], "stored_path": r[1]} for r in doc_rows]
         return idx
 
-    def list_indexes(self) -> list[dict]:
+    def list_indexes(self, user_id: str | None = None) -> list[dict]:
+        """Improvement #21: SECURE BY DEFAULT - see get_sessions() for
+        the identical rationale. user_id=None returns only unowned/legacy
+        indexes, never everyone's."""
+        query = "SELECT * FROM indexes WHERE "
+        query += "user_id = :user_id" if user_id is not None else "user_id IS NULL"
+        params: dict = {}
+        if user_id is not None:
+            params["user_id"] = user_id
+
         with self.engine.connect() as conn:
-            rows = conn.execute(text("SELECT * FROM indexes")).fetchall()
+            rows = conn.execute(text(query), params).fetchall()
             res = []
             for r in rows:
                 item = dict(r._mapping)

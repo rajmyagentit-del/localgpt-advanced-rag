@@ -285,8 +285,9 @@ def get_models():
 
 
 @app.get("/v1/sessions")
-def get_sessions():
-    sessions = db.get_sessions()
+def get_sessions(current_user: dict | None = Depends(get_current_user_optional)):
+    user_id = current_user["user_id"] if current_user else None
+    sessions = db.get_sessions(user_id=user_id)
     return {"sessions": sessions, "total": len(sessions)}
 
 
@@ -349,11 +350,14 @@ def rename_session(
 
 
 @app.get("/v1/sessions/{session_id}/documents")
-def get_session_documents(session_id: str):
+def get_session_documents(
+    session_id: str, current_user: dict | None = Depends(get_current_user_optional)
+):
     session_id = _valid_id(session_id, "session")
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    check_ownership(session.get("user_id"), current_user)
     docs = db.get_documents_for_session(session_id)
     filenames = [
         os.path.basename(p).split("_", 1)[-1] if "_" in os.path.basename(p) else os.path.basename(p)
@@ -376,6 +380,15 @@ def session_chat(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     check_ownership(session.get("user_id"), current_user)
+
+    if current_user:
+        usage = db.get_user_usage(current_user["user_id"])
+        if usage["query_count_today"] >= settings.max_queries_per_day:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily query limit reached ({settings.max_queries_per_day}/day). Try again tomorrow.",
+            )
+        db.increment_user_query_count(current_user["user_id"])
 
     is_valid, error = validate_chat_message(body.message)
     if not is_valid:
@@ -413,9 +426,19 @@ def session_chat(
 
 
 @app.post("/v1/sessions/{session_id}/upload")
-async def upload_files_to_session(session_id: str, request: Request, files: list[UploadFile]):
+async def upload_files_to_session(
+    session_id: str,
+    request: Request,
+    files: list[UploadFile],
+    current_user: dict | None = Depends(get_current_user_optional),
+):
     session_id = _valid_id(session_id, "session")
     _rate_limit(request, upload_rate_limiter)
+
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    check_ownership(session.get("user_id"), current_user)
 
     content_length = int(request.headers.get("content-length", 0) or 0)
     if content_length > MAX_TOTAL_UPLOAD_BYTES:
@@ -424,10 +447,24 @@ async def upload_files_to_session(session_id: str, request: Request, files: list
             detail=f"Upload exceeds maximum total size of {MAX_TOTAL_UPLOAD_BYTES // (1024*1024)}MB",
         )
 
+    if current_user:
+        usage = db.get_user_usage(current_user["user_id"])
+        remaining = settings.max_storage_bytes_per_user - usage["storage_bytes_used"]
+        if content_length > remaining:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Upload would exceed your storage quota "
+                    f"({settings.max_storage_bytes_per_user // (1024*1024)}MB total, "
+                    f"{remaining // (1024*1024)}MB remaining)."
+                ),
+            )
+
     uploaded_files = []
     upload_dir = "shared_uploads"
     os.makedirs(upload_dir, exist_ok=True)
 
+    total_bytes_written = 0
     for file in files:
         if not file.filename:
             continue
@@ -436,12 +473,16 @@ async def upload_files_to_session(session_id: str, request: Request, files: list
         contents = await file.read()
         with open(file_path, "wb") as f:
             f.write(contents)
+        total_bytes_written += len(contents)
         absolute_file_path = os.path.abspath(file_path)
         db.add_document_to_session(session_id, absolute_file_path)
         uploaded_files.append({"filename": file.filename, "stored_path": absolute_file_path})
 
     if not uploaded_files:
         raise HTTPException(status_code=400, detail="No files were uploaded")
+
+    if current_user and total_bytes_written:
+        db.increment_user_storage(current_user["user_id"], total_bytes_written)
 
     return {
         "message": f"Successfully uploaded {len(uploaded_files)} files.",
@@ -450,8 +491,15 @@ async def upload_files_to_session(session_id: str, request: Request, files: list
 
 
 @app.post("/v1/sessions/{session_id}/index")
-def index_session_documents(session_id: str):
+def index_session_documents(
+    session_id: str, current_user: dict | None = Depends(get_current_user_optional)
+):
     session_id = _valid_id(session_id, "session")
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    check_ownership(session.get("user_id"), current_user)
+
     logger.info(f"🔥 Received request to index documents for session {session_id[:8]}...")
 
     file_paths = db.get_documents_for_session(session_id)
@@ -505,8 +553,15 @@ def pdf_upload_deprecated(session_id: str):
 
 
 @app.get("/v1/sessions/{session_id}/indexes")
-def get_session_indexes(session_id: str):
+def get_session_indexes(
+    session_id: str, current_user: dict | None = Depends(get_current_user_optional)
+):
     session_id = _valid_id(session_id, "session")
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    check_ownership(session.get("user_id"), current_user)
+
     idx_ids = db.get_indexes_for_session(session_id)
     indexes = []
     for idx_id in idx_ids:
@@ -522,16 +577,30 @@ def get_session_indexes(session_id: str):
 
 
 @app.post("/v1/sessions/{session_id}/indexes/{index_id}")
-def link_index_to_session(session_id: str, index_id: str):
+def link_index_to_session(
+    session_id: str, index_id: str, current_user: dict | None = Depends(get_current_user_optional)
+):
     session_id = _valid_id(session_id, "session")
     index_id = _valid_id(index_id, "index")
+
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    check_ownership(session.get("user_id"), current_user)
+
+    index = db.get_index(index_id)
+    if not index:
+        raise HTTPException(status_code=404, detail="Index not found")
+    check_ownership(index.get("user_id"), current_user)
+
     db.link_index_to_session(session_id, index_id)
     return {"message": "Index linked to session"}
 
 
 @app.get("/v1/indexes")
-def get_indexes():
-    data = db.list_indexes()
+def get_indexes(current_user: dict | None = Depends(get_current_user_optional)):
+    user_id = current_user["user_id"] if current_user else None
+    data = db.list_indexes(user_id=user_id)
     return {"indexes": data, "total": len(data)}
 
 
@@ -596,9 +665,19 @@ def delete_index(index_id: str, current_user: dict | None = Depends(get_current_
 
 
 @app.post("/v1/indexes/{index_id}/upload")
-async def upload_files_to_index(index_id: str, request: Request, files: list[UploadFile]):
+async def upload_files_to_index(
+    index_id: str,
+    request: Request,
+    files: list[UploadFile],
+    current_user: dict | None = Depends(get_current_user_optional),
+):
     index_id = _valid_id(index_id, "index")
     _rate_limit(request, upload_rate_limiter)
+
+    index = db.get_index(index_id)
+    if not index:
+        raise HTTPException(status_code=404, detail="Index not found")
+    check_ownership(index.get("user_id"), current_user)
 
     content_length = int(request.headers.get("content-length", 0) or 0)
     if content_length > MAX_TOTAL_UPLOAD_BYTES:
@@ -607,10 +686,24 @@ async def upload_files_to_index(index_id: str, request: Request, files: list[Upl
             detail=f"Upload exceeds maximum total size of {MAX_TOTAL_UPLOAD_BYTES // (1024*1024)}MB",
         )
 
+    if current_user:
+        usage = db.get_user_usage(current_user["user_id"])
+        remaining = settings.max_storage_bytes_per_user - usage["storage_bytes_used"]
+        if content_length > remaining:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Upload would exceed your storage quota "
+                    f"({settings.max_storage_bytes_per_user // (1024*1024)}MB total, "
+                    f"{remaining // (1024*1024)}MB remaining)."
+                ),
+            )
+
     uploaded_files = []
     upload_dir = "shared_uploads"
     os.makedirs(upload_dir, exist_ok=True)
 
+    total_bytes_written = 0
     for file in files:
         if not file.filename:
             continue
@@ -619,6 +712,7 @@ async def upload_files_to_index(index_id: str, request: Request, files: list[Upl
         contents = await file.read()
         with open(file_path, "wb") as f:
             f.write(contents)
+        total_bytes_written += len(contents)
         absolute_path = os.path.abspath(file_path)
         db.add_document_to_index(index_id, file.filename, absolute_path)
         uploaded_files.append({"filename": file.filename, "stored_path": absolute_path})
@@ -626,15 +720,23 @@ async def upload_files_to_index(index_id: str, request: Request, files: list[Upl
     if not uploaded_files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
+    if current_user and total_bytes_written:
+        db.increment_user_storage(current_user["user_id"], total_bytes_written)
+
     return {"message": f"Uploaded {len(uploaded_files)} files", "uploaded_files": uploaded_files}
 
 
 @app.post("/v1/indexes/{index_id}/build")
-def build_index(index_id: str, body: BuildIndexRequest = BuildIndexRequest()):
+def build_index(
+    index_id: str,
+    body: BuildIndexRequest = BuildIndexRequest(),
+    current_user: dict | None = Depends(get_current_user_optional),
+):
     index_id = _valid_id(index_id, "index")
     index = db.get_index(index_id)
     if not index:
         raise HTTPException(status_code=404, detail="Index not found")
+    check_ownership(index.get("user_id"), current_user)
 
     file_paths = [d["stored_path"] for d in index.get("documents", [])]
     if not file_paths:
