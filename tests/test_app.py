@@ -601,3 +601,101 @@ class TestMultiTenantIsolation:
         for _ in range(2):
             resp = client.post(f"/v1/sessions/{session_id}/messages", json={"message": "hello"})
             assert resp.status_code != 429
+
+
+class TestEvalDashboardEndpoints:
+    """Improvement #22: tests the API surface the eval dashboard reads
+    from - real data written via ChatDatabase.record_eval_run(), read
+    back through the actual FastAPI routes."""
+
+    def test_no_runs_yet_returns_404_for_latest(self, client):
+        response = client.get("/v1/eval/runs/latest")
+        assert response.status_code == 404
+
+    def test_no_runs_yet_returns_empty_history(self, client):
+        response = client.get("/v1/eval/runs")
+        assert response.status_code == 200
+        assert response.json()["runs"] == []
+        assert response.json()["total"] == 0
+
+    def test_recorded_run_appears_in_history(self, client):
+        import backend.app as app_module
+
+        report = {
+            "passed": True,
+            "num_cases": 3,
+            "num_failed_cases": 0,
+            "metric_averages": {"faithfulness": 0.9},
+            "thresholds": {"faithfulness": 0.7},
+        }
+        app_module.db.record_eval_run(report, commit_sha="abc123")
+
+        response = client.get("/v1/eval/runs")
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert response.json()["runs"][0]["commit_sha"] == "abc123"
+
+    def test_latest_endpoint_returns_most_recent_run(self, client):
+        import backend.app as app_module
+
+        app_module.db.record_eval_run(
+            {
+                "passed": True,
+                "num_cases": 1,
+                "num_failed_cases": 0,
+                "metric_averages": {},
+                "thresholds": {},
+            },
+            commit_sha="old-commit",
+        )
+        app_module.db.record_eval_run(
+            {
+                "passed": False,
+                "num_cases": 1,
+                "num_failed_cases": 1,
+                "metric_averages": {},
+                "thresholds": {},
+            },
+            commit_sha="new-commit",
+        )
+
+        response = client.get("/v1/eval/runs/latest")
+        assert response.status_code == 200
+        assert response.json()["commit_sha"] == "new-commit"
+        assert response.json()["passed"] is False
+
+    def test_history_respects_limit_parameter(self, client):
+        import backend.app as app_module
+
+        for i in range(5):
+            app_module.db.record_eval_run(
+                {
+                    "passed": True,
+                    "num_cases": 1,
+                    "num_failed_cases": 0,
+                    "metric_averages": {},
+                    "thresholds": {},
+                },
+                commit_sha=f"commit-{i}",
+            )
+
+        response = client.get("/v1/eval/runs?limit=2")
+        assert response.status_code == 200
+        assert len(response.json()["runs"]) == 2
+
+    def test_metric_averages_and_thresholds_round_trip_through_json(self, client):
+        import backend.app as app_module
+
+        report = {
+            "passed": True,
+            "num_cases": 2,
+            "num_failed_cases": 0,
+            "metric_averages": {"faithfulness": 0.87, "context_precision": 0.65},
+            "thresholds": {"faithfulness": 0.7, "context_precision": 0.6},
+        }
+        app_module.db.record_eval_run(report, commit_sha="rt-test")
+
+        response = client.get("/v1/eval/runs/latest")
+        body = response.json()
+        assert body["metric_averages"]["faithfulness"] == 0.87
+        assert body["thresholds"]["context_precision"] == 0.6

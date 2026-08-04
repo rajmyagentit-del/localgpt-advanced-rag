@@ -117,3 +117,21 @@ session_indexes = Table(
     Column("index_id", String, ForeignKey("indexes.id")),
     Column("linked_at", String),
 )
+
+# Improvement #22 (live evaluation/regression dashboard): stores the
+# result of every eval/run_eval.py run over time, so the dashboard can
+# show trend lines (is retrieval quality improving or regressing across
+# commits) instead of just the most recent snapshot.
+eval_runs = Table(
+    "eval_runs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("run_at", String, nullable=False),
+    Column("commit_sha", String, nullable=True),
+    Column("passed", Integer, nullable=False),  # 0/1 - SQLite has no native bool
+    Column("num_cases", Integer, nullable=False),
+    Column("num_failed_cases", Integer, nullable=False),
+    Column("metric_averages", Text, nullable=False),  # JSON: {"faithfulness": 0.85, ...}
+    Column("thresholds", Text, nullable=False),  # JSON: {"faithfulness": 0.7, ...}
+    Index("idx_eval_runs_run_at", "run_at"),
+)

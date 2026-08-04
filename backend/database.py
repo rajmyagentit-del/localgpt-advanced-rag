@@ -569,6 +569,57 @@ class ChatDatabase:
                 },
             )
 
+    # --- Evaluation run history (Improvement #22) ---
+
+    def record_eval_run(self, report: dict, commit_sha: str | None = None) -> str:
+        """
+        Persists one eval/run_eval.py run (see eval/report.py's
+        EvalReport.to_dict() for the expected shape) so the dashboard
+        can show trends over time, not just the latest snapshot.
+        """
+        run_id = str(uuid.uuid4())
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                INSERT INTO eval_runs (id, run_at, commit_sha, passed, num_cases, num_failed_cases, metric_averages, thresholds)
+                VALUES (:id, :run_at, :commit_sha, :passed, :num_cases, :num_failed_cases, :metric_averages, :thresholds)
+            """),
+                {
+                    "id": run_id,
+                    "run_at": datetime.now().isoformat(),
+                    "commit_sha": commit_sha,
+                    "passed": 1 if report.get("passed") else 0,
+                    "num_cases": report.get("num_cases", 0),
+                    "num_failed_cases": report.get("num_failed_cases", 0),
+                    "metric_averages": json.dumps(report.get("metric_averages", {})),
+                    "thresholds": json.dumps(report.get("thresholds", {})),
+                },
+            )
+        logger.info(f"📊 Recorded eval run {run_id[:8]}... (passed={bool(report.get('passed'))})")
+        return run_id
+
+    def get_eval_run_history(self, limit: int = 50) -> list[dict]:
+        """Most recent eval runs first - what the dashboard's trend
+        chart plots."""
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM eval_runs ORDER BY run_at DESC LIMIT :limit"),
+                {"limit": limit},
+            ).fetchall()
+
+        runs = []
+        for row in rows:
+            run = dict(row._mapping)
+            run["passed"] = bool(run["passed"])
+            run["metric_averages"] = json.loads(run["metric_averages"])
+            run["thresholds"] = json.loads(run["thresholds"])
+            runs.append(run)
+        return runs
+
+    def get_latest_eval_run(self) -> dict | None:
+        history = self.get_eval_run_history(limit=1)
+        return history[0] if history else None
+
     def inspect_and_populate_index_metadata(self, index_id: str) -> dict:
         """
         Inspect LanceDB table to extract metadata for older indexes.

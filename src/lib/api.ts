@@ -1,4 +1,13 @@
-const API_BASE_URL = 'http://localhost:8000';
+// BUG FIX (discovered while building Improvement #22's dashboard):
+// the backend migrated to FastAPI with all routes under /v1/
+// (Improvement #9), but this file was never updated to match - every
+// single call below was silently hitting a 404 against the new
+// backend/app.py (it only worked against the old, now-deprecated
+// backend/server.py, which had no version prefix). Adding /v1 here
+// fixes all 21 call sites at once, verified by checking every unique
+// path suffix used in this file against the real FastAPI route
+// definitions in backend/app.py - all matched exactly.
+const API_BASE_URL = 'http://localhost:8000/v1';
 
 // 🆕 Simple UUID generator for client-side message IDs
 export const generateUUID = () => {
@@ -79,6 +88,22 @@ export interface SessionChatResponse {
   session: ChatSession;
   user_message_id: string;
   ai_message_id: string;
+}
+
+export interface EvalRun {
+  id: string;
+  run_at: string;
+  commit_sha: string | null;
+  passed: boolean;
+  num_cases: number;
+  num_failed_cases: number;
+  metric_averages: Record<string, number>;
+  thresholds: Record<string, number>;
+}
+
+export interface EvalRunHistoryResponse {
+  runs: EvalRun[];
+  total: number;
 }
 
 class ChatAPI {
@@ -627,6 +652,26 @@ class ChatAPI {
         }
       }
     }
+  }
+
+  // Improvement #22: evaluation dashboard endpoints
+  async getEvalRunHistory(limit: number = 50): Promise<EvalRunHistoryResponse> {
+    const response = await fetch(`${API_BASE_URL}/eval/runs?limit=${limit}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch eval run history: ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  async getLatestEvalRun(): Promise<EvalRun | null> {
+    const response = await fetch(`${API_BASE_URL}/eval/runs/latest`);
+    if (response.status === 404) {
+      return null; // no runs recorded yet - a real, expected state, not an error
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to fetch latest eval run: ${response.status}`);
+    }
+    return await response.json();
   }
 }
 

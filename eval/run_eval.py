@@ -5,7 +5,12 @@ Usage:
     pip install -r eval/requirements.txt
     ollama pull qwen3:8b
     ollama pull nomic-embed-text
-    python -m eval.run_eval [--json-out results.json] [--md-out results.md]
+    python -m eval.run_eval [--json-out results.json] [--md-out results.md] [--no-save-to-db]
+
+Every run is saved to the database by default (see backend/database.py's
+record_eval_run/get_eval_run_history) - this is what the evaluation
+dashboard (Improvement #22) reads from to show trends over time, not
+just the latest snapshot. Pass --no-save-to-db to skip this.
 
 For each question in the golden dataset (eval/golden_dataset.py), this:
   1. Runs the REAL agent (rag_system.agent.loop.Agent) to get an answer
@@ -64,11 +69,40 @@ async def run_evaluation(agent, config: RunConfig | None = None) -> list[CaseRes
     return results
 
 
+def _detect_commit_sha() -> str | None:
+    """Best-effort: use GITHUB_SHA if running in GitHub Actions,
+    otherwise ask git directly. Returns None if neither works - this is
+    optional metadata, never worth failing the eval run over."""
+    import os
+    import subprocess
+
+    if os.getenv("GITHUB_SHA"):
+        return os.getenv("GITHUB_SHA")
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run the RAG evaluation suite")
     parser.add_argument("--json-out", help="Write machine-readable results to this JSON file")
     parser.add_argument("--md-out", help="Write human-readable results to this markdown file")
     parser.add_argument("--judge-model", default="qwen3:8b", help="Ollama model to use as judge")
+    parser.add_argument(
+        "--no-save-to-db",
+        action="store_true",
+        help="Skip persisting this run to the database (it's saved by default, powering the eval dashboard - Improvement #22)",
+    )
+    parser.add_argument(
+        "--commit-sha",
+        help="Commit SHA to associate with this run (auto-detected from git/CI if omitted)",
+    )
     args = parser.parse_args()
 
     # Imported here, not at module level, so `python -m eval.report`-style
@@ -95,6 +129,14 @@ def main():
         with open(args.md_out, "w") as f:
             f.write(report.to_markdown())
         print(f"Wrote markdown results to {args.md_out}")
+
+    if not args.no_save_to_db:
+        from backend.database import ChatDatabase
+
+        commit_sha = args.commit_sha or _detect_commit_sha()
+        db = ChatDatabase()
+        run_id = db.record_eval_run(report.to_dict(), commit_sha=commit_sha)
+        print(f"\nSaved run {run_id} to the database (commit: {commit_sha or 'unknown'})")
 
     sys.exit(0 if report.passed else 1)
 

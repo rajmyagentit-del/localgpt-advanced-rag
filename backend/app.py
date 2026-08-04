@@ -253,6 +253,23 @@ def chat(body: ChatRequest, request: Request):
     }
 
 
+@app.get("/v1/eval/runs")
+def get_eval_run_history(limit: int = 50):
+    """Improvement #22: eval run history for the dashboard's trend chart."""
+    runs = db.get_eval_run_history(limit=limit)
+    return {"runs": runs, "total": len(runs)}
+
+
+@app.get("/v1/eval/runs/latest")
+def get_latest_eval_run():
+    """Improvement #22: most recent eval run - the dashboard's headline
+    pass/fail status."""
+    run = db.get_latest_eval_run()
+    if run is None:
+        raise HTTPException(status_code=404, detail="No eval runs recorded yet")
+    return run
+
+
 @app.get("/v1/models")
 def get_models():
     generation_models: list[str] = []
