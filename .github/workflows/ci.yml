@@ -105,13 +105,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build ${{ matrix.tag }}
+      - name: Build ${{ matrix.image.tag }}
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: ${{ matrix.image.dockerfile }}
           push: false
-          tags: ${{ matrix.tag }}:ci
+          tags: ${{ matrix.image.tag }}:ci
           # Cache layers between CI runs - keeps rebuilds fast when only
           # app code changed, not dependencies.
           cache-from: type=gha
