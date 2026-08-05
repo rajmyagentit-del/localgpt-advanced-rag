@@ -1,28 +1,17 @@
-# LocalGPT - Private Document Intelligence Platform
+# localgpt-advanced-rag
+
+*A fork of [LocalGPT](https://github.com/PromtEngineer/localGPT) - Private Document Intelligence Platform - extended into a production-hardened portfolio project. See "About This Fork" below for what changed and why.*
 
 <div align="center">
 
-<p align="center">
-<a href="https://trendshift.io/repositories/2947" target="_blank"><img src="https://trendshift.io/api/badge/repositories/2947" alt="PromtEngineer%2FlocalGPT | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</p>
-
 [![CI](https://github.com/rajmyagentit-del/localgpt-advanced-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/rajmyagentit-del/localgpt-advanced-rag/actions/workflows/ci.yml)
-[![GitHub Stars](https://img.shields.io/github/stars/PromtEngineer/localGPT?style=flat-square)](https://github.com/PromtEngineer/localGPT/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/PromtEngineer/localGPT?style=flat-square)](https://github.com/PromtEngineer/localGPT/network/members)
-[![GitHub Issues](https://img.shields.io/github/issues/PromtEngineer/localGPT?style=flat-square)](https://github.com/PromtEngineer/localGPT/issues)
-[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/PromtEngineer/localGPT?style=flat-square)](https://github.com/PromtEngineer/localGPT/pulls)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
+[![GitHub Stars](https://img.shields.io/github/stars/rajmyagentit-del/localgpt-advanced-rag?style=flat-square)](https://github.com/rajmyagentit-del/localgpt-advanced-rag/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/rajmyagentit-del/localgpt-advanced-rag?style=flat-square)](https://github.com/rajmyagentit-del/localgpt-advanced-rag/network/members)
+[![GitHub Issues](https://img.shields.io/github/issues/rajmyagentit-del/localgpt-advanced-rag?style=flat-square)](https://github.com/rajmyagentit-del/localgpt-advanced-rag/issues)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-supported-blue.svg?style=flat-square)](https://www.docker.com/)
 
-<p align="center">
-    <a href="https://x.com/engineerrprompt">
-      <img src="https://img.shields.io/badge/Follow%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow on X" />
-    </a>
-    <a href="https://discord.gg/tUDWAFGc">
-      <img src="https://img.shields.io/badge/Join%20our%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord" />
-    </a>
-  </p>
 </div>
 
 ## 🍴 About This Fork
@@ -154,20 +143,12 @@ Note: The installation is currently only tested on macOS.
 - 8GB+ RAM (16GB+ recommended)
 - Ollama (required for both deployment approaches)
 
-### ***NOTE***
-Before this brach is moved to the main branch, please clone this branch for instalation:
-
-```bash
-git clone -b localgpt-v2 https://github.com/PromtEngineer/localGPT.git
-cd localGPT
-```
-
 ### Option 1: Docker Deployment 
 
 ```bash
 # Clone the repository
-git clone https://github.com/PromtEngineer/localGPT.git
-cd localGPT
+git clone https://github.com/rajmyagentit-del/localgpt-advanced-rag.git
+cd localgpt-advanced-rag
 
 # Install Ollama locally (required even for Docker)
 curl -fsSL https://ollama.ai/install.sh | sh
@@ -200,8 +181,8 @@ docker compose logs -f
 
 ```bash
 # Clone the repository
-git clone https://github.com/PromtEngineer/localGPT.git
-cd localGPT
+git clone https://github.com/rajmyagentit-del/localgpt-advanced-rag.git
+cd localgpt-advanced-rag
 
 # Install Python dependencies
 pip install -r requirements.txt
@@ -995,8 +976,8 @@ We welcome contributions from developers of all skill levels! LocalGPT is an ope
 
 ```bash
 # Fork and clone the repository
-git clone https://github.com/PromtEngineer/localGPT.git
-cd localGPT
+git clone https://github.com/rajmyagentit-del/localgpt-advanced-rag.git
+cd localgpt-advanced-rag
 
 # Set up development environment
 pip install -r requirements.txt
@@ -1048,4 +1029,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=PromtEngineer/localGPT&type=Date)](https://star-history.com/#PromtEngineer/localGPT&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=rajmyagentit-del/localgpt-advanced-rag&type=Date)](https://star-history.com/#rajmyagentit-del/localgpt-advanced-rag&Date)
