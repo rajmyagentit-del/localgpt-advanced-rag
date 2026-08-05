@@ -14,7 +14,6 @@ exclude = [
     ".next",
     "lancedb",
     "index_store",
-    "backend/server.py",  # deprecated, superseded by backend/app.py - see its docstring
 ]
 
 [tool.ruff.lint]

@@ -42,7 +42,7 @@ Thank you for your interest in contributing to LocalGPT! This guide will help yo
    python system_health_check.py
    
    # Start development system
-   python run_system.py --mode dev
+   docker compose up --build
    ```
 
 ## 📋 Development Workflow
@@ -83,7 +83,7 @@ We use a feature branch workflow:
    python -m pytest tests/ -v
    
    # Test system integration
-   python run_system.py --health
+   curl http://localhost:8000/v1/health
    ```
 
 4. **Commit Your Changes**
@@ -364,7 +364,7 @@ When reporting bugs, please include:
 
 2. **Steps to Reproduce**
    ```
-   1. Start system with `python run_system.py`
+   1. Start system with `docker compose up --build`
    2. Upload document via web interface
    3. Ask question "What is this document about?"
    4. Error occurs during response generation

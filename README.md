@@ -43,7 +43,7 @@ This is my own fork of [PromtEngineer/localGPT](https://github.com/PromtEngineer
 | 8 | Rate limiting | Per-IP rate limiting on `/chat`-type and upload endpoints (in-memory, fixed-window), returning proper `429` + `Retry-After` headers. |
 | 12 | Observability (tracing) | Every query is now traced end-to-end (triage → retrieval → verification) with [OpenTelemetry](https://opentelemetry.io/) - latency and key attributes (query type, doc counts, confidence scores) per step, viewable via console output by default (`LOG_LEVEL`-style env var control: `OTEL_TRACES_EXPORTER=console\|file\|otlp\|none`). Deliberately **not** defaulted to a cloud SaaS backend (e.g. Langfuse Cloud) - that would work against this project's "100% local, private" positioning. Point it at Langfuse/Jaeger/any OTLP backend later via `OTEL_EXPORTER_OTLP_ENDPOINT` without touching the instrumentation code. |
 | 13 | Automated RAG evaluation (`eval/`) | Ragas-based suite scoring faithfulness, answer relevancy, context precision, and context recall against a golden question/reference-answer dataset, run through the REAL agent (not mocked). Judged by a **local Ollama model** via the OpenAI-compatible client (`openai` package, no LangChain needed) - consistent with the local-first ethos. See `eval/requirements.txt` for a real, documented dependency pin needed to make `ragas` import cleanly against the current LangChain ecosystem. |
-| 9 | FastAPI migration | `backend/app.py` replaces the raw `http.server`-based backend entirely - 21 routes, automatic request validation via Pydantic, interactive docs at `/docs`. Business logic extracted into `backend/chat_service.py` and reused, not rewritten. `backend/server.py` kept for historical reference, marked deprecated. |
+| 9 | FastAPI migration | `backend/app.py` replaces the raw `http.server`-based backend entirely - 21 routes, automatic request validation via Pydantic, interactive docs at `/docs`. Business logic extracted into `backend/chat_service.py` and reused, not rewritten. The old `backend/server.py` was kept deprecated for a while as a reference, then removed entirely once nothing depended on it - see the repo cleanup note below. |
 | 16 | API versioning | Every route lives under `/v1/` - came essentially free with the FastAPI migration. |
 | 10 | JWT auth + session ownership | `backend/auth.py`: stdlib password hashing (no bcrypt dependency), JWT tokens. New `users` table + nullable `user_id` columns (backward-compatible with pre-auth data). Verified with real cross-user access blocking, not just unit tests of the ownership-check function. |
 | 17 | Retry/backoff | Scoped retry on Ollama HTTP calls and LanceDB's `get_table()` - narrowly targeted (only `OSError` for LanceDB, since it's a local embedded DB where most failures are real bugs a retry wouldn't fix). |
@@ -223,11 +223,20 @@ ollama pull qwen3:0.6b
 ollama pull qwen3:8b
 ollama serve
 
-# Start the system (in a new terminal)
-python run_system.py
+# Start each service in its own terminal (see "Service Architecture" below
+# for what each one does). This replaced the old run_system.py launcher,
+# which was removed since it only knew how to start the deprecated backend.
+uvicorn backend.app:app --host 0.0.0.0 --port 8000     # terminal 2
+python -m rag_system.api_server                          # terminal 3
+npm run dev                                               # terminal 4
 
 # Access the application
 open http://localhost:3000
+```
+
+**Prefer not to juggle four terminals?** Use Docker instead - one command starts everything (see the Docker section below):
+```bash
+docker compose up --build
 ```
 
 **System Management:**
@@ -235,29 +244,20 @@ open http://localhost:3000
 # Check system health (comprehensive diagnostics)
 python system_health_check.py
 
-# Check service status and health
-python run_system.py --health
-
-# Start in production mode
-python run_system.py --mode prod
-
-# Skip frontend (backend + RAG API only)
-python run_system.py --no-frontend
-
-# View aggregated logs
-python run_system.py --logs-only
+# Check service status and health directly
+curl http://localhost:8000/v1/health
 
 # Stop all services
-python run_system.py --stop
-# Or press Ctrl+C in the terminal running python run_system.py
+# Press Ctrl+C in each terminal, or `docker compose down` if using Docker
 ```
 
 **Service Architecture:**
-The `run_system.py` launcher manages four key services:
+Four services work together:
 - **Ollama Server** (port 11434): AI model serving
 - **RAG API Server** (port 8001): Document processing and retrieval
-- **Backend Server** (port 8000): Session management and API endpoints
+- **Backend Server** (port 8000): Session management and API endpoints - `backend/app.py`, run via `uvicorn`
 - **Frontend Server** (port 3000): React/Next.js web interface
+
 
 ### Option 3: Manual Component Startup
 
@@ -374,7 +374,7 @@ python -c "from backend.database import ChatDatabase; ChatDatabase().init_databa
 python -c "from rag_system.main import get_agent; print('✅ Installation successful!')"
 
 # Validate complete setup
-python run_system.py --health
+curl http://localhost:8000/v1/health
 ```
 
 ---
@@ -610,7 +610,7 @@ export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 2. **System Health**: Run comprehensive diagnostics:
    ```bash
    python system_health_check.py  # Full system diagnostics
-   python run_system.py --health  # Service status check
+   curl http://localhost:8000/v1/health  # Service status check
    ```
 
 3. **Health Endpoints**: Check individual service health:
@@ -1008,7 +1008,7 @@ ollama pull qwen3:0.6b qwen3:8b
 
 # Verify setup
 python system_health_check.py
-python run_system.py --mode dev
+docker compose up --build
 ```
 
 ### 📋 How to Contribute

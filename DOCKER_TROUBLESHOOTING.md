@@ -533,8 +533,9 @@ docker volume prune -f
 # Stop Docker containers
 ./start-docker.sh stop
 
-# Use direct development instead
-python run_system.py
+# Use direct development instead (see README's Quick Start for the
+# per-service commands that replaced the old run_system.py launcher)
+uvicorn backend.app:app --host 0.0.0.0 --port 8000
 ```
 
 #### 2. Minimal Docker (RAG API only)
